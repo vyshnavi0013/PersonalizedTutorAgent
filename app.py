@@ -67,13 +67,21 @@ class TutorSessionManager:
     def _initialize_session(self):
         """Initialize session state"""
         st.session_state.initialized = True
-        st.session_state.current_student = 1
+        st.session_state.logged_in = False
+        st.session_state.student_email = None
+        st.session_state.student_name = None
+        st.session_state.student_id = 1
+        st.session_state.selected_subject = None
+        st.session_state.student_level = None  # beginner, intermediate, advanced
+        st.session_state.assessment_complete = False
         st.session_state.quiz_started = False
         st.session_state.quiz_responses = []
         st.session_state.learning_path = []
         st.session_state.knowledge_state = {}
         st.session_state.interaction_data = None
         st.session_state.current_question_idx = 0
+        st.session_state.assessment_responses = []
+        st.session_state.current_question_data = None
 
 
 def create_mock_data():
@@ -131,35 +139,277 @@ def load_data():
         return create_mock_data()
 
 
+def render_login_page():
+    """Render login/registration page"""
+    st.markdown("""
+    <style>
+    .login-container {
+        max-width: 400px;
+        margin: 50px auto;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+    
+    col1, col2, col3 = st.columns([1, 2, 1])
+    
+    with col2:
+        st.title("🎓 Personalized Tutor")
+        st.subheader("Welcome to AI-Powered Learning")
+        st.markdown("---")
+        
+        # Login form
+        st.subheader("Sign In / Register")
+        
+        email = st.text_input(
+            "Email Address",
+            placeholder="student@example.com",
+            key="login_email"
+        )
+        
+        password = st.text_input(
+            "Password",
+            type="password",
+            placeholder="Enter your password",
+            key="login_password"
+        )
+        
+        name = st.text_input(
+            "Full Name (for new users)",
+            placeholder="John Doe",
+            key="login_name"
+        )
+        
+        if st.button("📝 Sign In / Register", use_container_width=True, type="primary"):
+            if email and password:
+                st.session_state.logged_in = True
+                st.session_state.student_email = email
+                st.session_state.student_name = name if name else email.split('@')[0]
+                st.session_state.student_id = hash(email) % 1000  # Generate ID from email
+                st.success(f"✅ Welcome, {st.session_state.student_name}!")
+                st.balloons()
+                st.rerun()
+            else:
+                st.error("❌ Please enter both email and password")
+
+
+def render_subject_selection():
+    """Render subject selection page"""
+    st.title("🎯 Choose Your Learning Subject")
+    st.subheader(f"Welcome, {st.session_state.student_name}! 👋")
+    
+    st.markdown("""
+    Select a subject below and we'll analyze your current knowledge level to create a personalized learning path.
+    """)
+    
+    st.markdown("---")
+    
+    # Subject selection
+    subjects = ["Mathematics", "Science", "Biology", "Physics", "Chemistry", "History", "Geography"]
+    
+    cols = st.columns(3)
+    selected_subject = None
+    
+    for idx, subject in enumerate(subjects):
+        col = cols[idx % 3]
+        with col:
+            if st.button(f"📚 {subject}", use_container_width=True, key=f"subject_{subject}"):
+                selected_subject = subject
+                st.session_state.selected_subject = subject
+                st.rerun()
+    
+    st.markdown("---")
+    st.info("💡 Tip: Choose a subject you'd like to learn or improve at!")
+
+
+def render_initial_assessment(tutor_agent, qbank, profile_manager, student_id):
+    """Render initial assessment to determine student level"""
+    st.title(f"📋 Initial Assessment - {st.session_state.selected_subject}")
+    st.subheader("Let's analyze your knowledge level...")
+    
+    # Difficulty progression for assessment
+    assessment_difficulties = ["Easy", "Medium", "Hard"]
+    
+    st.markdown(f"Answer **3 quick questions** to determine your level...")
+    st.progress(len(st.session_state.assessment_responses) / 3)
+    
+    st.write(f"📊 Progress: {len(st.session_state.assessment_responses)}/3 completed")
+    
+    if len(st.session_state.assessment_responses) < 3:
+        current_idx = len(st.session_state.assessment_responses)
+        difficulty = assessment_difficulties[current_idx]
+        
+        # Generate AI question
+        st.write("🤖 Generating AI question...")
+        try:
+            question_data = tutor_agent.generate_quiz_question(
+                concept=st.session_state.selected_subject,
+                difficulty=difficulty,
+                mastery_level=0.5
+            )
+            
+            st.markdown("---")
+            
+            # Display question prominently
+            st.markdown(f"### 📋 Question {current_idx + 1}")
+            st.warning(f"**{question_data['question']}**")
+            st.info(f"**Difficulty:** {difficulty}")
+            
+            st.markdown("---")
+            
+            # Answer selection
+            st.markdown("### Select Your Answer")
+            answer = st.radio(
+                "Choose the best answer:",
+                question_data['options'],
+                key=f"assessment_answer_{current_idx}"
+            )
+            
+            st.markdown("---")
+            
+            # Buttons
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                if st.button("✓ Submit Answer", use_container_width=True, type="primary"):
+                    # Check if answer is correct
+                    is_correct = (answer == question_data['correct_answer'])
+                    
+                    st.session_state.assessment_responses.append({
+                        'question_id': f'assess_{current_idx + 1}',
+                        'difficulty': difficulty,
+                        'correct': is_correct,
+                        'question': question_data['question'],
+                        'student_answer': answer,
+                        'correct_answer': question_data['correct_answer'],
+                        'explanation': question_data['explanation']
+                    })
+                    st.rerun()
+            
+            with col2:
+                if st.button("ℹ️ Show Hint", use_container_width=True):
+                    st.info(f"💡 **Hint:** Consider the key aspects of {st.session_state.selected_subject} and how they apply in practice.")
+        
+        except Exception as e:
+            st.error(f"❌ Error generating question: {e}")
+            st.write("Using fallback question...")
+            
+            # Fallback question
+            fallback_question = {
+                "question": f"What is a key aspect of {st.session_state.selected_subject}?",
+                "options": ["Implementation", "Theory", "Practice", "Examples"],
+                "correct_answer": "Practice",
+                "explanation": "Practice is essential for mastering any concept."
+            }
+            
+            st.markdown("---")
+            st.markdown(f"### 📋 Question {current_idx + 1}")
+            st.warning(f"**{fallback_question['question']}**")
+            st.info(f"**Difficulty:** {difficulty}")
+            
+            st.markdown("---")
+            
+            answer = st.radio(
+                "Choose the best answer:",
+                fallback_question['options'],
+                key=f"assessment_answer_{current_idx}"
+            )
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("✓ Submit Answer", use_container_width=True, type="primary"):
+                    is_correct = (answer == fallback_question['correct_answer'])
+                    st.session_state.assessment_responses.append({
+                        'question_id': f'assess_{current_idx + 1}',
+                        'difficulty': difficulty,
+                        'correct': is_correct,
+                        'question': fallback_question['question'],
+                        'student_answer': answer,
+                        'correct_answer': fallback_question['correct_answer'],
+                        'explanation': fallback_question['explanation']
+                    })
+                    st.rerun()
+            
+            with col2:
+                st.button("ℹ️ Show Hint", use_container_width=True, disabled=True)
+    
+    else:
+        # Assessment complete - determine level
+        correct_count = sum(1 for r in st.session_state.assessment_responses if r['correct'])
+        
+        st.markdown("---")
+        st.success("✅ Assessment Complete!")
+        
+        # Determine level based on performance
+        if correct_count == 3:
+            level = "Advanced"
+            color = "🟢"
+            explanation = "You have strong foundational knowledge and are ready for advanced topics!"
+        elif correct_count == 2:
+            level = "Intermediate"
+            color = "🟡"
+            explanation = "You have good understanding and can handle intermediate concepts!"
+        else:
+            level = "Beginner"
+            color = "🔵"
+            explanation = "You're building your foundation - start with basics and progress gradually!"
+        
+        st.session_state.student_level = level
+        st.session_state.assessment_complete = True
+        
+        # Display level
+        st.metric("Your Level", f"{color} {level}", f"Score: {correct_count}/3")
+        st.write(f"**Analysis:** {explanation}")
+        
+        # Show performance breakdown
+        st.markdown("### Performance Breakdown")
+        for idx, response in enumerate(st.session_state.assessment_responses):
+            status = "✅ Correct" if response['correct'] else "❌ Incorrect"
+            st.write(f"**Question {idx + 1} ({response['difficulty']}):** {status}")
+        
+        st.markdown("---")
+        
+        if st.button("🚀 Start Learning", use_container_width=True, type="primary"):
+            st.session_state.quiz_started = False
+            st.rerun()
+
+
 def render_sidebar():
     """Render sidebar navigation"""
     st.sidebar.title("🎓 Tutor Agent")
     st.sidebar.markdown("---")
     
+    # Show logged in user info
+    if st.session_state.logged_in:
+        st.sidebar.success(f"👤 {st.session_state.student_name}")
+        if st.session_state.selected_subject:
+            st.sidebar.info(f"📚 Subject: {st.session_state.selected_subject}")
+            if st.session_state.student_level:
+                st.sidebar.info(f"📊 Level: {st.session_state.student_level}")
+        
+        if st.sidebar.button("🚪 Logout", use_container_width=True):
+            st.session_state.logged_in = False
+            st.session_state.selected_subject = None
+            st.session_state.student_level = None
+            st.session_state.assessment_complete = False
+            st.rerun()
+    
+    st.sidebar.markdown("---")
+    
     page = st.sidebar.radio(
         "Navigation",
-        ["Dashboard", "Interactive Quiz", "Learning Path", "Student Analytics", "System Info"]
+        ["Dashboard", "Interactive Quiz", "Learning Path", "Student Analytics", "System Info"],
+        disabled=not st.session_state.assessment_complete
     )
-    
-    # Student selector
-    st.sidebar.markdown("### 📚 Student Selection")
-    student_id = st.sidebar.number_input(
-        "Select Student ID",
-        min_value=1,
-        max_value=50,
-        value=st.session_state.current_student
-    )
-    st.session_state.current_student = student_id
     
     st.sidebar.markdown("---")
     st.sidebar.markdown("### ℹ️ About")
     st.sidebar.info(
         "**Personalized Tutor Agent**\n\n"
         "An AI-powered learning system that:\n"
-        "- Adapts to individual learning styles\n"
-        "- Provides personalized feedback\n"
-        "- Generates customized learning paths\n"
-        "- Tracks knowledge mastery"
+        "- 🎯 Analyzes your knowledge level\n"
+        "- 🤖 Uses AI for personalized feedback\n"
+        "- 📈 Adapts to your learning style\n"
+        "- 🎓 Generates custom learning paths"
     )
     
     return page
@@ -318,6 +568,8 @@ def render_quiz(qbank, student_id, profile_manager, tutor_agent):
             st.session_state.quiz_started = True
             st.session_state.quiz_responses = []
             st.session_state.current_question_idx = 0
+            st.session_state.current_question_data = None
+            st.rerun()
     
     with col2:
         st.metric("Questions Attempted", len(st.session_state.quiz_responses))
@@ -329,66 +581,134 @@ def render_quiz(qbank, student_id, profile_manager, tutor_agent):
     
     st.markdown("---")
     
+    st.write(f"🔵 Quiz Started: {st.session_state.quiz_started}")
+    st.write(f"📊 Questions Completed: {len(st.session_state.quiz_responses)}")
+    
     if st.session_state.quiz_started:
-        # Get questions for concept
-        questions = qbank.get_questions_by_concept(concept)
+        # Determine difficulty based on performance
+        if len(st.session_state.quiz_responses) == 0:
+            difficulty = "Easy"
+        else:
+            accuracy = np.mean([r['correct'] for r in st.session_state.quiz_responses])
+            if accuracy >= 0.8:
+                difficulty = "Hard"
+            elif accuracy >= 0.5:
+                difficulty = "Medium"
+            else:
+                difficulty = "Easy"
         
-        if questions:
-            current_q = questions[st.session_state.current_question_idx % len(questions)]
-            
-            st.subheader(f"Question {len(st.session_state.quiz_responses) + 1}")
-            st.write(f"**Concept:** {current_q.concept}")
-            st.write(f"**Difficulty:** {current_q.difficulty}")
-            
-            # Question display
-            st.markdown(f"### Question ID: {current_q.question_id}")
-            st.info(f"Estimated time: {current_q.estimated_time} seconds")
-            
-            # Answer selection
-            with st.form("answer_form"):
-                answer = st.radio(
-                    "Select your answer:",
-                    ["Option A", "Option B", "Option C", "Option D"],
-                    key=f"q_{current_q.question_id}"
+        # Get or generate current question
+        if st.session_state.current_question_data is None:
+            st.write("🤖 Generating AI question...")
+            try:
+                question_data = tutor_agent.generate_quiz_question(
+                    concept=concept,
+                    difficulty=difficulty,
+                    mastery_level=knowledge.get(concept, 0.5)
                 )
+                st.session_state.current_question_data = question_data
+            except Exception as e:
+                st.error(f"❌ Error generating question: {e}")
+                return
+        
+        question_data = st.session_state.current_question_data
+        
+        # Display question clearly
+        st.subheader(f"Question {len(st.session_state.quiz_responses) + 1}")
+        
+        # Question metadata
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Concept", concept)
+        with col2:
+            st.metric("Difficulty", difficulty)
+        with col3:
+            st.metric("Time Limit", "60s")
+        
+        st.markdown("---")
+        
+        # THE ACTUAL QUESTION - PROMINENT DISPLAY
+        st.markdown("### 📋 Question")
+        st.warning(f"**{question_data['question']}**")
+        
+        st.markdown("---")
+        
+        # Answer selection
+        st.markdown("### 📌 Your Answer")
+        answer = st.radio(
+            "Select one:",
+            question_data['options'],
+            key=f"q_{len(st.session_state.quiz_responses)}"
+        )
+        
+        st.markdown("---")
+        
+        # Buttons
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            if st.button("✅ Submit Answer", key="submit"):
+                # Check if answer is correct
+                is_correct = (answer == question_data['correct_answer'])
                 
-                col1, col2, col3 = st.columns(3)
-                
-                with col1:
-                    if st.form_submit_button("Submit Answer"):
-                        # Random correct (for demo)
-                        is_correct = np.random.choice([0, 1], p=[0.35, 0.65])
-                        
-                        response = {
-                            'question_id': current_q.question_id,
-                            'correct': is_correct,
-                            'time_spent': 45
-                        }
-                        st.session_state.quiz_responses.append(response)
-                        st.session_state.current_question_idx += 1
-                        st.rerun()
-                
-                with col2:
-                    if st.form_submit_button("Get Hint"):
-                        hint = tutor_agent.feedback_gen.generate_hint(concept)
-                        st.info(hint)
-                
-                with col3:
-                    if st.form_submit_button("End Quiz"):
-                        st.session_state.quiz_started = False
-                        st.rerun()
-            
-            # Show feedback for last response
-            if st.session_state.quiz_responses:
-                last_response = st.session_state.quiz_responses[-1]
-                feedback = tutor_agent.feedback_gen.generate_immediate_feedback(
-                    last_response['correct'], concept, 'Medium', 45, 30
+                response = {
+                    'question': question_data['question'],
+                    'student_answer': answer,
+                    'correct_answer': question_data['correct_answer'],
+                    'correct': is_correct,
+                    'time_spent': 45,
+                    'concept': concept,
+                    'difficulty': difficulty,
+                    'explanation': question_data['explanation']
+                }
+                st.session_state.quiz_responses.append(response)
+                st.session_state.current_question_data = None
+                st.rerun()
+        
+        with col2:
+            if st.button("💡 Get Hint", key="hint"):
+                hint = tutor_agent.generate_hint(
+                    concept=concept,
+                    question=question_data['question'],
+                    student_attempt=answer,
+                    hint_level=1
                 )
-                
-                if last_response['correct']:
-                    st.success(feedback)
-                else:
-                    st.warning(feedback)
+                st.info(hint)
+        
+        with col3:
+            if st.button("❌ End Quiz", key="end"):
+                st.session_state.quiz_started = False
+                st.session_state.current_question_data = None
+                st.rerun()
+        
+        st.markdown("---")
+        
+        # Show feedback for last response
+        if st.session_state.quiz_responses:
+            last_response = st.session_state.quiz_responses[-1]
+            
+            # Use AI-powered feedback
+            feedback = tutor_agent.generate_immediate_feedback(
+                is_correct=last_response['correct'],
+                student_response=last_response['student_answer'],
+                correct_answer=last_response['correct_answer'],
+                concept=concept,
+                difficulty=difficulty,
+                mastery_level=knowledge.get(concept, 0.5),
+                time_spent=last_response['time_spent'],
+                estimated_time=60
+            )
+            
+            st.markdown("### 📌 Feedback")
+            if last_response['correct']:
+                st.success("✅ Correct!")
+                st.success(feedback)
+                st.info(f"**Explanation:** {last_response['explanation']}")
+            else:
+                st.warning("❌ Incorrect")
+                st.warning(feedback)
+                st.info(f"**Correct Answer:** {last_response['correct_answer']}")
+                st.info(f"**Explanation:** {last_response['explanation']}")
         
         # End quiz summary
         if len(st.session_state.quiz_responses) >= 5:
@@ -618,11 +938,21 @@ def main():
     # Initialize session
     manager = TutorSessionManager()
     
+    # Check if user is logged in
+    if not st.session_state.logged_in:
+        render_login_page()
+        return
+    
     # Load data
     interactions_df, qbank_df = load_data()
     
     if interactions_df is None or qbank_df is None:
         st.error("Cannot start application without data files.")
+        return
+    
+    # Check if subject is selected
+    if not st.session_state.selected_subject:
+        render_subject_selection()
         return
     
     # Initialize managers
@@ -641,21 +971,26 @@ def main():
     
     tutor_agent = PersonalizedTutorAgent()
     
-    # Render sidebar
+    # Check if initial assessment is complete
+    if not st.session_state.assessment_complete:
+        render_initial_assessment(tutor_agent, qbank, profile_manager, st.session_state.student_id)
+        return
+    
+    # Render sidebar (only after login and assessment)
     page = render_sidebar()
     
     # Route pages
     if page == "Dashboard":
-        render_dashboard(profile_manager, dkt, path_manager, st.session_state.current_student)
+        render_dashboard(profile_manager, dkt, path_manager, st.session_state.student_id)
     
     elif page == "Interactive Quiz":
-        render_quiz(qbank, st.session_state.current_student, profile_manager, tutor_agent)
+        render_quiz(qbank, st.session_state.student_id, profile_manager, tutor_agent)
     
     elif page == "Learning Path":
-        render_learning_path(path_manager, profile_manager, st.session_state.current_student)
+        render_learning_path(path_manager, profile_manager, st.session_state.student_id)
     
     elif page == "Student Analytics":
-        render_analytics(profile_manager, st.session_state.current_student)
+        render_analytics(profile_manager, st.session_state.student_id)
     
     elif page == "System Info":
         render_system_info()
@@ -664,7 +999,7 @@ def main():
     st.markdown("---")
     st.markdown(
         "<p style='text-align: center; color: gray;'>© 2024 Personalized Tutor Agent | "
-        "IIT/NIT Research-Aligned Project</p>",
+        "AI-Powered Learning with Groq</p>",
         unsafe_allow_html=True
     )
 

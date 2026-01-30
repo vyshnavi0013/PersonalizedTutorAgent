@@ -1,0 +1,20 @@
+{
+  "groq": {
+    "api_key": "YOUR_API_KEY_HERE",
+    "model": "llama-3.3-70b-versatile",
+    "max_tokens": 1024,
+    "temperature": 0.7,
+    "top_p": 1.0
+  },
+  "ai_settings": {
+    "feedback_enabled": true,
+    "hint_generation_enabled": true,
+    "personalized_feedback": true,
+    "response_timeout": 30,
+    "retry_attempts": 3
+  },
+  "logging": {
+    "level": "INFO",
+    "log_ai_calls": true
+  }
+}

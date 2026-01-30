@@ -7,3 +7,4 @@ scipy==1.11.2
 matplotlib==3.7.2
 seaborn==0.12.2
 python-dotenv==1.0.0
+groq>=0.4.1
