@@ -403,16 +403,41 @@ Format as:
         Returns:
             Dict with 'question', 'options', 'correct_answer', 'explanation'
         """
-        prompt = f"""You are an expert teacher creating a quiz question.
+        import random
+        import time
+        
+        # Add randomization to ensure variety
+        random_seed = int(time.time() * 1000) % 10000
+        random.seed(random_seed)
+        
+        # Define different question types for variety
+        question_types = [
+            "conceptual understanding",
+            "practical application",
+            "problem-solving scenario",
+            "definition and terminology",
+            "comparative analysis",
+            "real-world use case"
+        ]
+        
+        selected_type = random.choice(question_types)
+        
+        prompt = f"""You are an expert teacher creating UNIQUE quiz questions.
 
 Generate a {difficulty.lower()} quiz question about: {concept}
+Question Type: {selected_type}
 Student's Mastery Level: {mastery_level:.1%}
 
-IMPORTANT: Create question appropriate for the mastery level and difficulty.
+IMPORTANT REQUIREMENTS:
+1. Create a COMPLETELY DIFFERENT question each time (vary question structure, examples, and angles)
+2. Make it appropriate for the mastery level and difficulty
+3. Focus on {selected_type}
+4. Use specific, contextual examples
+5. Avoid generic or repetitive questions
 
 Return ONLY valid JSON (no markdown, no extra text):
 {{
-    "question": "Clear, concise question text about {concept}",
+    "question": "Clear, concise, specific question text about {concept}",
     "options": [
         "First plausible option",
         "Second plausible option",
@@ -421,23 +446,24 @@ Return ONLY valid JSON (no markdown, no extra text):
     ],
     "correct_answer": "The correct option (must be one of the four options above)",
     "correct_index": 0,
-    "explanation": "Why this answer is correct"
+    "explanation": "Why this answer is correct and educational insights"
 }}
 
 Requirements:
-1. question: Clear and specific
-2. options: All plausible, only one correct
+1. question: Clear, specific, and varied (not generic)
+2. options: All plausible, contextually relevant, only one correct
 3. correct_answer: Exact match to one option
 4. correct_index: 0-3 position of correct answer in options list
 5. explanation: Educational value explaining why answer is correct"""
 
         messages = [
-            {"role": "system", "content": "You are an expert educator creating quiz questions. Always return valid JSON."},
+            {"role": "system", "content": "You are an expert educator creating unique, varied quiz questions. Always return valid JSON. Create different questions each time - vary the question type, examples, and approach."},
             {"role": "user", "content": prompt}
         ]
         
         try:
-            response = self._call_groq(messages, max_tokens=800, temperature=0.8)
+            # Use higher temperature for more creativity and variety
+            response = self._call_groq(messages, max_tokens=800, temperature=1.2)
             
             # Parse JSON response
             import json
@@ -466,31 +492,101 @@ Requirements:
             
         except json.JSONDecodeError as e:
             logger.warning(f"Failed to parse JSON response: {e}")
-            # Return a fallback question
-            return {
-                "question": f"What is a key aspect of {concept}?",
-                "options": [
-                    "Implementation and application",
-                    "Theoretical foundation",
-                    "Practical examples",
-                    "Real-world scenarios"
-                ],
-                "correct_answer": "Practical examples",
-                "correct_index": 2,
-                "explanation": f"Understanding {concept} requires looking at practical examples to see how concepts apply in real situations."
-            }
+            # Return diverse fallback questions based on question type
+            fallback_questions = [
+                {
+                    "question": f"Which of the following best describes a key characteristic of {concept}?",
+                    "options": [
+                        "It focuses on theoretical principles only",
+                        "It emphasizes practical application and real-world implementation",
+                        "It avoids any practical considerations",
+                        "It is only relevant in academic settings"
+                    ],
+                    "correct_answer": "It emphasizes practical application and real-world implementation",
+                    "correct_index": 1,
+                    "explanation": f"Understanding {concept} requires balancing both theory and practical application in real-world contexts."
+                },
+                {
+                    "question": f"How is {concept} typically applied in practice?",
+                    "options": [
+                        "Through memorization only",
+                        "By identifying patterns and solving problems systematically",
+                        "By ignoring contextual factors",
+                        "Through random trial and error"
+                    ],
+                    "correct_answer": "By identifying patterns and solving problems systematically",
+                    "correct_index": 1,
+                    "explanation": f"Proper application of {concept} requires systematic problem-solving and pattern recognition."
+                },
+                {
+                    "question": f"What is the main purpose of learning {concept}?",
+                    "options": [
+                        "To pass tests only",
+                        "To understand fundamental principles and apply them to solve real problems",
+                        "To memorize definitions",
+                        "To compete with others"
+                    ],
+                    "correct_answer": "To understand fundamental principles and apply them to solve real problems",
+                    "correct_index": 1,
+                    "explanation": f"The primary goal of studying {concept} is gaining understanding and developing problem-solving skills."
+                },
+                {
+                    "question": f"When would you use {concept} in a real-world scenario?",
+                    "options": [
+                        "Never - it's only theoretical",
+                        "Only in academic environments",
+                        "When solving practical problems that require its principles",
+                        "When you have nothing else to do"
+                    ],
+                    "correct_answer": "When solving practical problems that require its principles",
+                    "correct_index": 2,
+                    "explanation": f"{concept} is applied when facing real-world problems that require understanding its core principles."
+                }
+            ]
+            
+            import random
+            return random.choice(fallback_questions)
         except Exception as e:
             logger.error(f"Error generating question: {e}")
-            # Return a fallback question
-            return {
-                "question": f"What is a key aspect of {concept}?",
-                "options": [
-                    "Implementation and application",
-                    "Theoretical foundation",
-                    "Practical examples",
-                    "Real-world scenarios"
-                ],
-                "correct_answer": "Practical examples",
-                "correct_index": 2,
-                "explanation": f"Understanding {concept} requires looking at practical examples to see how concepts apply in real situations."
-            }
+            # Return diverse fallback questions
+            fallback_questions = [
+                {
+                    "question": f"What is a fundamental aspect of {concept}?",
+                    "options": [
+                        "Ignoring practical considerations",
+                        "Building on foundational knowledge and principles",
+                        "Avoiding real-world applications",
+                        "Focusing only on theory"
+                    ],
+                    "correct_answer": "Building on foundational knowledge and principles",
+                    "correct_index": 1,
+                    "explanation": f"Learning {concept} effectively means building on foundational knowledge and understanding its core principles."
+                },
+                {
+                    "question": f"Why is {concept} important?",
+                    "options": [
+                        "It has no practical value",
+                        "It helps solve problems and improve understanding in various contexts",
+                        "It's only for academic purposes",
+                        "It's outdated and not relevant"
+                    ],
+                    "correct_answer": "It helps solve problems and improve understanding in various contexts",
+                    "correct_index": 1,
+                    "explanation": f"The importance of {concept} lies in its ability to help us solve problems and understand complex situations."
+                },
+                {
+                    "question": f"What skill does understanding {concept} develop?",
+                    "options": [
+                        "Only memorization",
+                        "Critical thinking and problem-solving abilities",
+                        "The ability to avoid challenges",
+                        "Superficial knowledge only"
+                    ],
+                    "correct_answer": "Critical thinking and problem-solving abilities",
+                    "correct_index": 1,
+                    "explanation": f"Mastering {concept} develops critical thinking and analytical problem-solving skills."
+                }
+            ]
+            
+            import random
+            return random.choice(fallback_questions)

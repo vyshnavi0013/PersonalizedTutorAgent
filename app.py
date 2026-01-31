@@ -256,21 +256,25 @@ def render_initial_assessment(tutor_agent, qbank, profile_manager, student_id):
             
             st.markdown("---")
             
-            # Answer selection
+            # Answer selection using a form to prevent auto-submission
             st.markdown("### Select Your Answer")
-            answer = st.radio(
-                "Choose the best answer:",
-                question_data['options'],
-                key=f"assessment_answer_{current_idx}"
-            )
-            
-            st.markdown("---")
-            
-            # Buttons
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                if st.button("✓ Submit Answer", use_container_width=True, type="primary"):
+            with st.form(key=f"assessment_form_{current_idx}", clear_on_submit=False):
+                answer = st.radio(
+                    "Choose the best answer:",
+                    question_data['options'],
+                    key=f"assessment_answer_{current_idx}"
+                )
+                
+                # Buttons
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    submit_button = st.form_submit_button("✓ Submit Answer", use_container_width=True, type="primary")
+                
+                with col2:
+                    hint_button = st.form_submit_button("ℹ️ Show Hint", use_container_width=True)
+                
+                if submit_button:
                     # Check if answer is correct
                     is_correct = (answer == question_data['correct_answer'])
                     
@@ -284,10 +288,11 @@ def render_initial_assessment(tutor_agent, qbank, profile_manager, student_id):
                         'explanation': question_data['explanation']
                     })
                     st.rerun()
-            
-            with col2:
-                if st.button("ℹ️ Show Hint", use_container_width=True):
+                
+                if hint_button:
                     st.info(f"💡 **Hint:** Consider the key aspects of {st.session_state.selected_subject} and how they apply in practice.")
+            
+            st.markdown("---")
         
         except Exception as e:
             st.error(f"❌ Error generating question: {e}")
@@ -314,9 +319,16 @@ def render_initial_assessment(tutor_agent, qbank, profile_manager, student_id):
                 key=f"assessment_answer_{current_idx}"
             )
             
-            col1, col2 = st.columns(2)
-            with col1:
-                if st.button("✓ Submit Answer", use_container_width=True, type="primary"):
+            # Answer submission using form
+            with st.form(key=f"fallback_assessment_form_{current_idx}", clear_on_submit=False):
+                col1, col2 = st.columns(2)
+                with col1:
+                    submit_button = st.form_submit_button("✓ Submit Answer", use_container_width=True, type="primary")
+                
+                with col2:
+                    hint_button = st.form_submit_button("ℹ️ Show Hint", use_container_width=True)
+                
+                if submit_button:
                     is_correct = (answer == fallback_question['correct_answer'])
                     st.session_state.assessment_responses.append({
                         'question_id': f'assess_{current_idx + 1}',
@@ -328,9 +340,9 @@ def render_initial_assessment(tutor_agent, qbank, profile_manager, student_id):
                         'explanation': fallback_question['explanation']
                     })
                     st.rerun()
-            
-            with col2:
-                st.button("ℹ️ Show Hint", use_container_width=True, disabled=True)
+                
+                if hint_button:
+                    st.info(f"💡 **Hint:** Consider the key aspects of {st.session_state.selected_subject} and how they apply in practice.")
     
     else:
         # Assessment complete - determine level
@@ -633,21 +645,30 @@ def render_quiz(qbank, student_id, profile_manager, tutor_agent):
         
         st.markdown("---")
         
-        # Answer selection
+        # Answer selection using form to prevent auto-submission
         st.markdown("### 📌 Your Answer")
-        answer = st.radio(
-            "Select one:",
-            question_data['options'],
-            key=f"q_{len(st.session_state.quiz_responses)}"
-        )
-        
-        st.markdown("---")
-        
-        # Buttons
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            if st.button("✅ Submit Answer", key="submit"):
+        with st.form(key=f"quiz_form_{len(st.session_state.quiz_responses)}", clear_on_submit=False):
+            answer = st.radio(
+                "Select one:",
+                question_data['options'],
+                key=f"q_{len(st.session_state.quiz_responses)}"
+            )
+            
+            st.markdown("---")
+            
+            # Buttons
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                submit_button = st.form_submit_button("✅ Submit Answer", use_container_width=True, type="primary")
+            
+            with col2:
+                hint_button = st.form_submit_button("💡 Get Hint", use_container_width=True)
+            
+            with col3:
+                end_button = st.form_submit_button("❌ End Quiz", use_container_width=True)
+            
+            if submit_button:
                 # Check if answer is correct
                 is_correct = (answer == question_data['correct_answer'])
                 
@@ -664,9 +685,8 @@ def render_quiz(qbank, student_id, profile_manager, tutor_agent):
                 st.session_state.quiz_responses.append(response)
                 st.session_state.current_question_data = None
                 st.rerun()
-        
-        with col2:
-            if st.button("💡 Get Hint", key="hint"):
+            
+            if hint_button:
                 hint = tutor_agent.generate_hint(
                     concept=concept,
                     question=question_data['question'],
@@ -674,9 +694,8 @@ def render_quiz(qbank, student_id, profile_manager, tutor_agent):
                     hint_level=1
                 )
                 st.info(hint)
-        
-        with col3:
-            if st.button("❌ End Quiz", key="end"):
+            
+            if end_button:
                 st.session_state.quiz_started = False
                 st.session_state.current_question_data = None
                 st.rerun()
