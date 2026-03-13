@@ -9,8 +9,12 @@ import numpy as np
 import plotly.graph_objects as go
 import plotly.express as px
 from datetime import datetime
+import time
+import logging
 import sys
 import os
+
+logger = logging.getLogger(__name__)
 
 # Add src to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
@@ -20,6 +24,10 @@ from knowledge_tracing import SimplifiedDKT
 from learning_path import LearningPathGenerator, AdaptivePathManager
 from adaptive_quiz import AdaptiveQuizEngine, QuestionBank, DifficultyAdaptor
 from tutor_agent import PersonalizedTutorAgent
+from src.courses import CourseManager
+from learning_content import LearningContentGenerator, LearningPathOrchestrator
+from src.curriculum import Curriculum
+from src.structured_learning import StructuredLearningManager, StructuredLearningSession
 
 # Configure page
 st.set_page_config(
@@ -72,16 +80,27 @@ class TutorSessionManager:
         st.session_state.student_name = None
         st.session_state.student_id = 1
         st.session_state.selected_subject = None
+        st.session_state.selected_course = None
         st.session_state.student_level = None  # beginner, intermediate, advanced
         st.session_state.assessment_complete = False
+        st.session_state.learning_path_displayed = False
         st.session_state.quiz_started = False
         st.session_state.quiz_responses = []
+        st.session_state.learning_session = None
+        st.session_state.recent_performance = {}
+        st.session_state.learning_materials_viewed = []
         st.session_state.learning_path = []
         st.session_state.knowledge_state = {}
         st.session_state.interaction_data = None
         st.session_state.current_question_idx = 0
         st.session_state.assessment_responses = []
         st.session_state.current_question_data = None
+        # Structured learning session state
+        st.session_state.structured_learning_session = None
+        st.session_state.current_topic_step = "explanation"  # explanation, examples, quiz_prompt, quiz, completed
+        st.session_state.quiz_question_index = 0
+        st.session_state.quiz_topic_responses = []
+        st.session_state.quiz_questions = []
 
 
 def create_mock_data():
@@ -204,7 +223,7 @@ def render_subject_selection():
     st.markdown("---")
     
     # Subject selection
-    subjects = ["Mathematics", "Science", "Biology", "Physics", "Chemistry", "History", "Geography"]
+    subjects = ["Mathematics", "Physics", "Chemistry"]
     
     cols = st.columns(3)
     selected_subject = None
@@ -219,6 +238,9 @@ def render_subject_selection():
     
     st.markdown("---")
     st.info("💡 Tip: Choose a subject you'd like to learn or improve at!")
+    
+    st.markdown("---")
+    st.success("📚 **More courses coming soon!** Stay tuned for Biology, History, Geography, and more exciting subjects!")
 
 
 def render_initial_assessment(tutor_agent, qbank, profile_manager, student_id):
@@ -380,9 +402,571 @@ def render_initial_assessment(tutor_agent, qbank, profile_manager, student_id):
         
         st.markdown("---")
         
-        if st.button("🚀 Start Learning", use_container_width=True, type="primary"):
-            st.session_state.quiz_started = False
+        # Auto-generate learning path immediately
+        st.info("🚀 Generating your personalized learning path...")
+        try:
+            from learning_content import LearningPathOrchestrator
+            orchestrator = LearningPathOrchestrator()
+            
+            course = CourseManager.get_course(st.session_state.selected_course)
+            student_knowledge = profile_manager.get_or_create_profile(student_id).get_knowledge_state_vector()
+            
+            # Build recent performance from assessment
+            recent_performance = {}
+            for concept in course.concepts:
+                recent_acc = correct_count / 3 if len(st.session_state.assessment_responses) > 0 else 0.5
+                recent_performance[concept] = recent_acc
+            
+            learning_session = orchestrator.create_personalized_learning_session(
+                course_id=st.session_state.selected_course,
+                course_concepts=course.concepts,
+                student_knowledge=student_knowledge,
+                student_level=level.lower(),
+                recent_performance=recent_performance
+            )
+            st.session_state.learning_session = learning_session
+            st.session_state.learning_path_displayed = True
+            st.success("✅ Learning path generated! Redirecting...")
             st.rerun()
+        except Exception as e:
+            st.error(f"❌ Error generating learning path: {str(e)}")
+            if st.button("Try Again"):
+                st.rerun()
+
+
+def render_learning_path_post_assessment():
+    """Render personalized learning path after assessment"""
+    st.title("📚 Your Personalized Learning Path")
+    
+    try:
+        # Check if learning session exists in state
+        if st.session_state.learning_session:
+            learning_session = st.session_state.learning_session
+        else:
+            # If not, check for course and regenerate
+            if not st.session_state.selected_course:
+                st.error("❌ No course selected. Please select a course first.")
+                return
+            
+            course = CourseManager.get_course(st.session_state.selected_course)
+            if not course:
+                st.error("❌ Course not found. Please select a course.")
+                return
+            
+            st.warning("Regenerating learning path...")
+            from learning_content import LearningPathOrchestrator
+            orchestrator = LearningPathOrchestrator()
+            
+            student_id = st.session_state.student_id
+            profile_manager = LearnerProfileManager()
+            profile = profile_manager.get_or_create_profile(student_id)
+            student_knowledge = profile.get_knowledge_state_vector()
+            
+            recent_performance = {}
+            for concept in course.concepts:
+                recent_acc = sum(
+                    1 for r in st.session_state.assessment_responses if r['correct']
+                ) / len(st.session_state.assessment_responses) if st.session_state.assessment_responses else 0.5
+                recent_performance[concept] = recent_acc
+            
+            learning_session = orchestrator.create_personalized_learning_session(
+                course_id=st.session_state.selected_course,
+                course_concepts=course.concepts,
+                student_knowledge=student_knowledge,
+                student_level=st.session_state.student_level.lower() if st.session_state.student_level else "beginner",
+                recent_performance=recent_performance
+            )
+            st.session_state.learning_session = learning_session
+        
+        # Get course info
+        course = CourseManager.get_course(st.session_state.selected_course)
+        if not course:
+            st.error("❌ Course not found.")
+            return
+        
+        # Display session summary
+        st.success("✅ Learning Path Generated!")
+        
+        st.markdown(f"""
+        ## 🎓 Your Recommended Learning Sequence
+        
+        Based on your **{st.session_state.student_level}** level and recent performance, 
+        we've created a personalized path through **{course.name}**.
+        
+        **Total Estimated Time:** ⏱️ {learning_session['estimated_total_time']} minutes (~{learning_session['estimated_total_time']/60:.1f} hours)
+        """)
+        
+        st.markdown("---")
+        
+        # Display learning materials
+        st.subheader("📚 Recommended Learning Materials")
+        
+        for idx, item in enumerate(learning_session["learning_materials"]):
+            rec = item["recommendation"]
+            mat = item["material"]
+            
+            with st.expander(
+                f"**{idx + 1}. {rec.concept.capitalize()}** ({mat.material_type.capitalize()}) - {mat.duration_minutes}min",
+                expanded=(idx == 0)
+            ):
+                # Recommendation reason
+                st.write(f"**📌 Why this?** {rec.reason}")
+                st.write(f"**⏱️ Estimated time:** {mat.duration_minutes} minutes")
+                st.write(f"**📖 Type:** {mat.material_type.capitalize()}")
+                
+                st.markdown("---")
+                
+                # Display content
+                st.write(f"### {mat.title}")
+                st.write(mat.content)
+                
+                st.markdown("---")
+                
+                # Mark as viewed
+                if st.button(f"✅ Mark as Complete", key=f"complete_{idx}"):
+                    st.session_state.learning_materials_viewed.append(rec.concept)
+                    st.success(f"Great! You've completed {rec.concept}. Ready for the next topic?")
+        
+        # Progress indicator
+        st.markdown("---")
+        st.subheader("📊 Your Progress")
+        
+        materials_viewed = len(st.session_state.learning_materials_viewed)
+        total_materials = len(learning_session["learning_materials"])
+        progress = materials_viewed / total_materials if total_materials > 0 else 0
+        
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            st.progress(progress)
+        with col2:
+            st.write(f"{materials_viewed}/{total_materials} completed")
+        
+        st.markdown("---")
+        
+        # Next steps
+        st.info(f"""
+        **💡 Next Steps:**
+        
+        1. 📖 Start with the **{learning_session['learning_materials'][0]['recommendation'].concept.capitalize()}** concept
+        2. 📝 Review the learning material and examples
+        3. ✍️ Work through the practice problems
+        4. 🎯 When ready, take a quiz to test your understanding
+        5. 🔄 Repeat with the next recommended concept
+        
+        **Remember:** Learning is a journey, not a race. Take your time and understand each concept deeply!
+        """)
+        
+        # Action buttons
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            if st.button("📝 Take a Quiz", use_container_width=True):
+                st.session_state.learning_path_displayed = False
+                st.session_state.quiz_started = True
+                st.rerun()
+        
+        with col2:
+            if st.button("📊 View Dashboard", use_container_width=True):
+                st.session_state.learning_path_displayed = False
+                st.rerun()
+        
+        with col3:
+            if st.button("🔄 Regenerate Path", use_container_width=True):
+                st.rerun()
+    
+    except Exception as e:
+        st.error(f"❌ Error generating learning path: {str(e)}")
+        import traceback
+        st.error(traceback.format_exc())
+
+
+def render_structured_learning_flow():
+    """Render the new structured learning flow with topics, explanations, examples, and quizzes"""
+    st.title("📚 Structured Learning Path")
+    
+    # Top Navigation Bar
+    nav_col1, nav_col2, nav_col3, nav_col4 = st.columns([1, 1, 1, 2])
+    with nav_col1:
+        if st.button("🏠 Home", use_container_width=True):
+            st.session_state.structured_learning_session = None
+            st.session_state.learning_path_displayed = False
+            st.rerun()
+    with nav_col2:
+        if st.button("📊 Dashboard", use_container_width=True):
+            st.session_state.learning_path_displayed = False
+            st.rerun()
+    with nav_col3:
+        if st.button("🔄 Restart", use_container_width=True):
+            st.session_state.structured_learning_session = None
+            st.session_state.current_topic_step = "explanation"
+            st.rerun()
+    
+    st.markdown("---")
+    
+    try:
+        # Initialize structured learning manager
+        content_generator = LearningContentGenerator()
+        learning_manager = StructuredLearningManager(content_generator)
+        
+        # Create or retrieve session
+        if not st.session_state.structured_learning_session:
+            session = learning_manager.create_session(
+                subject=st.session_state.selected_subject,
+                student_level=st.session_state.student_level.lower() if st.session_state.student_level else "beginner"
+            )
+            st.session_state.structured_learning_session = session
+        else:
+            session = st.session_state.structured_learning_session
+        
+        # Check if all topics are completed
+        if session.is_completed():
+            st.success("🎉 Congratulations! You've completed all topics in this learning path!")
+            
+            # Show summary
+            summary = learning_manager.get_session_summary(session)
+            
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("Total Topics", summary['total_topics'])
+            with col2:
+                st.metric("Completed", summary['completed_topics'])
+            with col3:
+                st.metric("Progress", f"{summary['progress_percentage']:.0f}%")
+            with col4:
+                st.metric("Avg Quiz Score", f"{summary['average_quiz_score']:.1f}%")
+            
+            st.markdown("---")
+            
+            if st.button("🔄 Start New Learning Path", use_container_width=True):
+                st.session_state.structured_learning_session = None
+                st.session_state.current_topic_step = "explanation"
+                st.rerun()
+            
+            if st.button("📊 View Dashboard", use_container_width=True):
+                st.session_state.learning_path_displayed = False
+                st.rerun()
+            
+            return
+        
+        # Display progress
+        current_topic = session.get_current_topic()
+        if not current_topic:
+            st.error("❌ No current topic")
+            return
+        
+        # Progress bar
+        progress_percentage = session.get_progress_percentage()
+        st.progress(progress_percentage / 100)
+        st.caption(f"Progress: {session.completed_topics}/{len(session.topics)} topics ({progress_percentage:.0f}%)")
+        
+        st.markdown(f"### Topic {session.completed_topics + 1}/{len(session.topics)}: {current_topic.name}")
+        st.markdown(f"**Level:** {session.student_level.capitalize()} | **Subject:** {session.subject}")
+        st.markdown(f"*{current_topic.description}*")
+        st.markdown("---")
+        
+        # Step 1: Explanation
+        if st.session_state.current_topic_step == "explanation":
+            st.subheader("📖 Concept Explanation")
+            
+            with st.spinner(f"Loading explanation for {current_topic.name}..."):
+                explanation_result = learning_manager.load_topic_explanation(session)
+            
+            if "error" not in explanation_result:
+                st.markdown(explanation_result['explanation'])
+            else:
+                st.error(f"Error loading explanation: {explanation_result['error']}")
+            
+            col1, col2 = st.columns([3, 1])
+            with col2:
+                if st.button("➡️ Next: Examples", use_container_width=True):
+                    st.session_state.current_topic_step = "examples"
+                    st.rerun()
+        
+        # Step 2: Examples
+        elif st.session_state.current_topic_step == "examples":
+            st.subheader("💡 Practical Examples")
+            
+            with st.spinner(f"Loading examples for {current_topic.name}..."):
+                examples_result = learning_manager.load_topic_examples(session)
+            
+            if "error" not in examples_result:
+                st.markdown(examples_result['examples'])
+            else:
+                st.error(f"Error loading examples: {examples_result['error']}")
+            
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                if st.button("⬅️ Back: Explanation", use_container_width=True):
+                    st.session_state.current_topic_step = "explanation"
+                    st.rerun()
+            
+            with col3:
+                if st.button("➡️ Next: Quiz", use_container_width=True):
+                    st.session_state.current_topic_step = "quiz_prompt"
+                    st.rerun()
+        
+        # Step 3: Quiz Prompt
+        elif st.session_state.current_topic_step == "quiz_prompt":
+            st.subheader("🎯 Quiz Time!")
+            
+            st.info(f"""
+            You've learned about **{current_topic.name}**. Now let's test your understanding!
+            
+            **Ready to take a quiz on this topic?**
+            """)
+            
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                if st.button("✅ Yes, Take Quiz", use_container_width=True, key="take_quiz_yes"):
+                    learning_manager.record_quiz_completion(session, quiz_taken=True)
+                    st.session_state.current_topic_step = "quiz"
+                    st.session_state.quiz_started = True
+                    st.session_state.quiz_question_index = 0
+                    st.session_state.quiz_topic_responses = []
+                    st.rerun()
+            
+            with col2:
+                if st.button("⏭️ Skip Quiz", use_container_width=True, key="skip_quiz"):
+                    learning_manager.record_quiz_completion(session, quiz_taken=False)
+                    session.move_to_next_topic()
+                    st.session_state.current_topic_step = "explanation"
+                    st.rerun()
+            
+            with col3:
+                if st.button("⬅️ Back: Examples", use_container_width=True):
+                    st.session_state.current_topic_step = "examples"
+                    st.rerun()
+        
+        # Step 4: Quiz (adaptive with real questions)
+        elif st.session_state.current_topic_step == "quiz":
+            st.subheader(f"📝 Quiz: {current_topic.name}")
+            
+            # Initialize quiz session state if needed
+            if 'quiz_question_index' not in st.session_state:
+                st.session_state.quiz_question_index = 0
+            if 'quiz_topic_responses' not in st.session_state:
+                st.session_state.quiz_topic_responses = []
+            if 'quiz_questions' not in st.session_state:
+                st.session_state.quiz_questions = []
+            
+            # Generate quiz questions on first load
+            if len(st.session_state.quiz_questions) == 0:
+                st.info("🔄 Generating personalized quiz questions for this topic...")
+                
+                # Initialize tutor agent
+                tutor_agent = PersonalizedTutorAgent()
+                
+                # Map difficulty level
+                difficulty_map = {
+                    "beginner": "Easy",
+                    "intermediate": "Medium",
+                    "advanced": "Hard"
+                }
+                difficulty = difficulty_map.get(st.session_state.student_level.lower(), "Medium")
+                
+                # Generate 3 quiz questions specifically for this topic
+                topic_questions = []
+                for i in range(3):
+                    try:
+                        question_data = tutor_agent.generate_quiz_question(
+                            concept=current_topic.name,
+                            difficulty=difficulty,
+                            mastery_level=0.5
+                        )
+                        topic_questions.append(question_data)
+                    except Exception as e:
+                        logger.error(f"Error generating question {i+1}: {e}")
+                        # Fallback question
+                        topic_questions.append({
+                            'question': f"What is a key characteristic of {current_topic.name}?",
+                            'options': [
+                                'It involves understanding core principles',
+                                'It is only theoretical',
+                                'It has no practical applications',
+                                'It is not important'
+                            ],
+                            'correct_answer': 'It involves understanding core principles',
+                            'explanation': f"{current_topic.name} is fundamental to understanding {session.subject}"
+                        })
+                
+                st.session_state.quiz_questions = topic_questions
+                st.rerun()
+            
+            num_questions = len(st.session_state.quiz_questions)
+            
+            if st.session_state.quiz_question_index < num_questions:
+                current_q_idx = st.session_state.quiz_question_index
+                question_data = st.session_state.quiz_questions[current_q_idx]
+                
+                st.write(f"**Question {current_q_idx + 1}/{num_questions}**")
+                st.write(f"Topic: **{current_topic.name}**")
+                st.markdown("---")
+                st.write(f"### {question_data['question']}")
+                
+                # Display options
+                selected_answer = st.radio(
+                    "Choose your answer:",
+                    question_data['options'],
+                    key=f"quiz_q_{current_q_idx}"
+                )
+                
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    if st.button("✓ Submit Answer", use_container_width=True, key=f"submit_q_{current_q_idx}"):
+                        is_correct = selected_answer == question_data['correct_answer']
+                        st.session_state.quiz_topic_responses.append({
+                            'question': question_data['question'],
+                            'answer': selected_answer,
+                            'correct': is_correct,
+                            'correct_answer': question_data['correct_answer'],
+                            'explanation': question_data.get('explanation', '')
+                        })
+                        
+                        if is_correct:
+                            st.success("✅ Correct!")
+                        else:
+                            st.error(f"❌ Incorrect. The correct answer is: {question_data['correct_answer']}")
+                        
+                        st.session_state.quiz_question_index += 1
+                        time.sleep(1.5)
+                        st.rerun()
+                
+                with col2:
+                    if st.button("⏭️ Skip Question", use_container_width=True, key=f"skip_q_{current_q_idx}"):
+                        st.session_state.quiz_topic_responses.append({
+                            'question': question_data['question'],
+                            'answer': 'skipped',
+                            'correct': False,
+                            'correct_answer': question_data['correct_answer'],
+                            'explanation': question_data.get('explanation', '')
+                        })
+                        st.session_state.quiz_question_index += 1
+                        st.rerun()
+            
+            else:
+                # Quiz complete - show results
+                st.success("🎉 Quiz Complete!")
+                
+                correct = sum(1 for r in st.session_state.quiz_topic_responses if r['correct'])
+                total = len(st.session_state.quiz_topic_responses)
+                score = (correct / total * 100) if total > 0 else 0
+                
+                # Display score with color coding
+                if score >= 80:
+                    score_color = "green"
+                    score_msg = "🌟 Excellent!"
+                elif score >= 60:
+                    score_color = "orange"
+                    score_msg = "👍 Good!"
+                else:
+                    score_color = "red"
+                    score_msg = "📚 Keep learning!"
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.metric("Your Score", f"{score:.0f}%", f"{score_msg}")
+                with col2:
+                    st.metric("Correct Answers", f"{correct}/{total}")
+                
+                # Show answer review
+                with st.expander("📋 Review Your Answers", expanded=True):
+                    for idx, response in enumerate(st.session_state.quiz_topic_responses):
+                        status = "✅" if response['correct'] else "❌"
+                        st.write(f"**{status} Question {idx + 1}**")
+                        st.write(f"📝 {response['question']}")
+                        st.write(f"Your answer: **{response['answer']}**")
+                        if not response['correct']:
+                            st.write(f"Correct answer: **{response['correct_answer']}**")
+                        if response.get('explanation'):
+                            st.info(f"💡 {response['explanation']}")
+                        st.markdown("---")
+                
+                # Record the score in session
+                learning_manager.record_quiz_completion(session, quiz_taken=True, score=score)
+                
+                # Next steps
+                st.markdown("---")
+                st.subheader("What's Next?")
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    if st.button("➡️ Next Topic", use_container_width=True, key="next_topic_btn"):
+                        session.move_to_next_topic()
+                        st.session_state.current_topic_step = "explanation"
+                        st.session_state.quiz_question_index = 0
+                        st.session_state.quiz_topic_responses = []
+                        st.session_state.quiz_questions = []
+                        st.rerun()
+                with col2:
+                    if st.button("📊 View Dashboard", use_container_width=True, key="dashboard_btn"):
+                        st.session_state.learning_path_displayed = False
+                        st.rerun()
+    
+    except Exception as e:
+        st.error(f"❌ Error in structured learning: {str(e)}")
+        import traceback
+        st.error(traceback.format_exc())
+
+
+def render_dashboard_post_assessment():
+    """Render dashboard with learning recommendations"""
+    st.title("📊 Dashboard")
+    
+    try:
+        course = CourseManager.get_course(st.session_state.selected_course)
+        if not course:
+            st.error("❌ Course not found.")
+            return
+        
+        # Display course overview
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("📖 Current Course", course.name)
+        with col2:
+            st.metric("📊 Your Level", st.session_state.student_level)
+        with col3:
+            materials_completed = len(st.session_state.learning_materials_viewed)
+            st.metric("✅ Materials Completed", materials_completed)
+        
+        st.markdown("---")
+        
+        # Quick actions
+        st.subheader("🚀 Quick Actions")
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            if st.button("📚 View Learning Path", use_container_width=True):
+                st.session_state.learning_path_displayed = True
+                st.rerun()
+        
+        with col2:
+            if st.button("📝 Take a Quiz", use_container_width=True):
+                st.session_state.quiz_started = True
+                st.rerun()
+        
+        with col3:
+            if st.button("📊 View Analytics", use_container_width=True):
+                pass  # Navigate to analytics
+        
+        st.markdown("---")
+        
+        # Display learning session info if available
+        if st.session_state.learning_session:
+            st.subheader("📈 Current Learning Session")
+            session = st.session_state.learning_session
+            
+            st.info(f"""
+            **Progress:** {len(st.session_state.learning_materials_viewed)}/{len(session['learning_materials'])} materials completed
+            
+            **Estimated Remaining Time:** ⏱️ {session['estimated_total_time']} minutes
+            
+            **Next Topics:** {', '.join([item['recommendation'].concept.capitalize() for item in session['learning_materials'][:3]])}
+            """)
+    
+    except Exception as e:
+        st.error(f"❌ Error loading dashboard: {str(e)}")
+
 
 
 def render_sidebar():
@@ -754,8 +1338,19 @@ def render_learning_path(path_manager, profile_manager, student_id):
     """Render learning path"""
     st.title("🛤️ Your Personalized Learning Path")
     
+    # If learning session exists from post-assessment, show it
+    if st.session_state.learning_session:
+        st.success("✅ Your personalized learning path is ready!")
+        render_learning_path_post_assessment()
+        return
+    
+    # Otherwise show the general learning path
     profile = profile_manager.get_or_create_profile(student_id)
     knowledge = profile.get_knowledge_state_vector()
+    
+    if not knowledge:
+        st.warning("⚠️ Complete an assessment first to generate a learning path.")
+        return
     
     # Path generator
     path_gen = LearningPathGenerator(
@@ -951,6 +1546,39 @@ def render_system_info():
     """)
 
 
+def render_course_selection():
+    """Render course selection page"""
+    st.title("Select a Learning Course")
+
+    # Fetch available courses
+    courses = CourseManager.get_courses()
+    course_options = [(course.id, course.name) for course in courses]
+
+    # Display course selection dropdown
+    selected_course_id = st.selectbox(
+        "Choose a course:",
+        options=[course[0] for course in course_options],
+        format_func=lambda course_id: dict(course_options).get(course_id, "Unknown Course")
+    )
+
+    # Display course details
+    if selected_course_id:
+        selected_course = CourseManager.get_course(selected_course_id)
+        st.subheader(selected_course.name)
+        st.write(selected_course.description)
+        st.write(f"**Difficulty:** {selected_course.difficulty.capitalize()}")
+        st.write(f"**Duration:** {selected_course.duration_hours} hours")
+        st.write(f"**Concepts Covered:** {', '.join(selected_course.concepts)}")
+
+        # Confirm course selection
+        if st.button("Start Course", use_container_width=True, type="primary"):
+            st.session_state.selected_course = selected_course_id
+            st.success(f"✅ Course selected: {selected_course.name}")
+            st.info("📚 Get ready for your assessment!")
+            st.rerun()
+            st.success(f"You have selected the course: {selected_course.name}")
+
+
 def main():
     """Main Streamlit app"""
     
@@ -990,17 +1618,38 @@ def main():
     
     tutor_agent = PersonalizedTutorAgent()
     
+    # Auto-assign course based on selected subject if not already selected
+    if not st.session_state.selected_course and st.session_state.selected_subject:
+        # Map subject to course
+        subject_to_course = {
+            "Mathematics": "math-101",
+            "Physics": "math-201",
+            "Chemistry": "math-301"
+        }
+        assigned_course = subject_to_course.get(st.session_state.selected_subject, "math-101")
+        st.session_state.selected_course = assigned_course
+    
     # Check if initial assessment is complete
     if not st.session_state.assessment_complete:
         render_initial_assessment(tutor_agent, qbank, profile_manager, st.session_state.student_id)
         return
+    
+    # If structured learning flow should be displayed (NEW - after assessment)
+    if st.session_state.learning_path_displayed:
+        render_structured_learning_flow()
+        return
+    
+    # If old learning path should be displayed (fallback)
+    # if st.session_state.learning_path_displayed:
+    #     render_learning_path_post_assessment()
+    #     return
     
     # Render sidebar (only after login and assessment)
     page = render_sidebar()
     
     # Route pages
     if page == "Dashboard":
-        render_dashboard(profile_manager, dkt, path_manager, st.session_state.student_id)
+        render_dashboard_post_assessment()
     
     elif page == "Interactive Quiz":
         render_quiz(qbank, st.session_state.student_id, profile_manager, tutor_agent)

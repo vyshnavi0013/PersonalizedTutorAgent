@@ -8,6 +8,7 @@ import numpy as np
 from typing import List, Dict, Tuple
 from dataclasses import dataclass
 import heapq
+from src.courses import CourseManager
 
 
 @dataclass
@@ -357,6 +358,31 @@ class LearningPathGenerator:
         """
         total_time = sum(node['estimated_time'] for node in path)
         return total_time
+
+    def generate_course_path(self, course_id: str, student_knowledge: Dict[str, float]) -> List[Dict]:
+        """
+        Generate a learning path specific to a course
+
+        Args:
+            course_id: ID of the selected course
+            student_knowledge: Current mastery for each concept
+
+        Returns:
+            List of learning path nodes
+        """
+        course = CourseManager.get_course(course_id)
+        if not course:
+            return []
+
+        weak_concepts = [
+            concept for concept in course.concepts
+            if student_knowledge.get(concept, 0.0) < 0.5
+        ]
+
+        return self.generate_path(
+            student_knowledge=student_knowledge,
+            weak_concepts=weak_concepts
+        )
 
 
 class AdaptivePathManager:

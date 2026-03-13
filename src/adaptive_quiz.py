@@ -7,6 +7,7 @@ import pandas as pd
 import numpy as np
 from typing import List, Dict, Optional, Tuple
 import random
+from src.courses import CourseManager
 
 
 class Question:
@@ -145,6 +146,25 @@ class QuestionBank:
             'by_difficulty': difficulties,
             'by_concept': concepts
         }
+
+    def get_questions_by_course(self, course_id: str) -> List[Question]:
+        """
+        Get questions for all concepts in a course
+
+        Args:
+            course_id: ID of the selected course
+
+        Returns:
+            List of questions for the course
+        """
+        course = CourseManager.get_course(course_id)
+        if not course:
+            return []
+
+        questions = []
+        for concept in course.concepts:
+            questions.extend(self.get_questions_by_concept(concept))
+        return questions
 
 
 class AdaptiveQuizEngine:
