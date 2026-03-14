@@ -107,6 +107,11 @@ class TutorSessionManager:
         st.session_state.current_page = None  # Track current page for button-based navigation (None = use sidebar)
         st.session_state.quiz_topic_responses = []
         st.session_state.quiz_questions = []
+        # Assessment feedback tracking
+        st.session_state.current_assessment_question = None  # Question data after answer submitted
+        st.session_state.current_question_for_assessment = None  # Question data before answer submitted
+        st.session_state.showing_assessment_feedback = False
+        st.session_state.assessment_answer_submitted = None
 
 
 def create_mock_data():
@@ -250,143 +255,30 @@ def render_subject_selection():
 
 
 def render_initial_assessment(tutor_agent, qbank, profile_manager, student_id):
-    """Render initial assessment to determine student level"""
+    """Render initial assessment to determine student level with inline feedback"""
     st.title(f"📋 Initial Assessment - {st.session_state.selected_subject}")
     st.subheader("Let's analyze your knowledge level...")
     
     # Difficulty progression for assessment
-    assessment_difficulties = ["Easy", "Medium", "Hard"]
+    assessment_difficulties = ["Easy", "Easy-Medium", "Medium", "Medium-Hard", "Hard"]
     
-    st.markdown(f"Answer **3 quick questions** to determine your level...")
-    st.progress(len(st.session_state.assessment_responses) / 3)
+    st.markdown(f"Answer **5 quick questions** to determine your level...")
+    st.progress(len(st.session_state.assessment_responses) / 5)
+    st.write(f"📊 Progress: {len(st.session_state.assessment_responses)}/5 completed")
     
-    st.write(f"📊 Progress: {len(st.session_state.assessment_responses)}/3 completed")
-    
-    if len(st.session_state.assessment_responses) < 3:
-        current_idx = len(st.session_state.assessment_responses)
-        difficulty = assessment_difficulties[current_idx]
-        
-        # Generate AI question
-        st.write("🤖 Generating AI question...")
-        try:
-            question_data = tutor_agent.generate_quiz_question(
-                concept=st.session_state.selected_subject,
-                difficulty=difficulty,
-                mastery_level=0.5
-            )
-            
-            st.markdown("---")
-            
-            # Display question prominently
-            st.markdown(f"### 📋 Question {current_idx + 1}")
-            st.warning(f"**{question_data['question']}**")
-            st.info(f"**Difficulty:** {difficulty}")
-            
-            st.markdown("---")
-            
-            # Answer selection using a form to prevent auto-submission
-            st.markdown("### Select Your Answer")
-            with st.form(key=f"assessment_form_{current_idx}", clear_on_submit=False):
-                answer = st.radio(
-                    "Choose the best answer:",
-                    question_data['options'],
-                    key=f"assessment_answer_{current_idx}"
-                )
-                
-                # Buttons
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    submit_button = st.form_submit_button("✓ Submit Answer", use_container_width=True, type="primary")
-                
-                with col2:
-                    hint_button = st.form_submit_button("ℹ️ Show Hint", use_container_width=True)
-                
-                if submit_button:
-                    # Check if answer is correct
-                    is_correct = (answer == question_data['correct_answer'])
-                    
-                    st.session_state.assessment_responses.append({
-                        'question_id': f'assess_{current_idx + 1}',
-                        'difficulty': difficulty,
-                        'correct': is_correct,
-                        'question': question_data['question'],
-                        'student_answer': answer,
-                        'correct_answer': question_data['correct_answer'],
-                        'explanation': question_data['explanation']
-                    })
-                    st.rerun()
-                
-                if hint_button:
-                    st.info(f"💡 **Hint:** Consider the key aspects of {st.session_state.selected_subject} and how they apply in practice.")
-            
-            st.markdown("---")
-        
-        except Exception as e:
-            st.error(f"❌ Error generating question: {e}")
-            st.write("Using fallback question...")
-            
-            # Fallback question
-            fallback_question = {
-                "question": f"What is a key aspect of {st.session_state.selected_subject}?",
-                "options": ["Implementation", "Theory", "Practice", "Examples"],
-                "correct_answer": "Practice",
-                "explanation": "Practice is essential for mastering any concept."
-            }
-            
-            st.markdown("---")
-            st.markdown(f"### 📋 Question {current_idx + 1}")
-            st.warning(f"**{fallback_question['question']}**")
-            st.info(f"**Difficulty:** {difficulty}")
-            
-            st.markdown("---")
-            
-            # Answer submission using form
-            st.markdown("### Select Your Answer")
-            with st.form(key=f"fallback_assessment_form_{current_idx}", clear_on_submit=False):
-                answer = st.radio(
-                    "Choose the best answer:",
-                    fallback_question['options'],
-                    key=f"assessment_answer_{current_idx}"
-                )
-                
-                # Buttons
-                col1, col2 = st.columns(2)
-                with col1:
-                    submit_button = st.form_submit_button("✓ Submit Answer", use_container_width=True, type="primary")
-                
-                with col2:
-                    hint_button = st.form_submit_button("ℹ️ Show Hint", use_container_width=True)
-                
-                if submit_button:
-                    is_correct = (answer == fallback_question['correct_answer'])
-                    st.session_state.assessment_responses.append({
-                        'question_id': f'assess_{current_idx + 1}',
-                        'difficulty': difficulty,
-                        'correct': is_correct,
-                        'question': fallback_question['question'],
-                        'student_answer': answer,
-                        'correct_answer': fallback_question['correct_answer'],
-                        'explanation': fallback_question['explanation']
-                    })
-                    st.rerun()
-                
-                if hint_button:
-                    st.info(f"💡 **Hint:** Consider the key aspects of {st.session_state.selected_subject} and how they apply in practice.")
-    
-    else:
+    if len(st.session_state.assessment_responses) >= 5:
         # Assessment complete - determine level
         correct_count = sum(1 for r in st.session_state.assessment_responses if r['correct'])
         
         st.markdown("---")
         st.success("✅ Assessment Complete!")
         
-        # Determine level based on performance
-        if correct_count == 3:
+        # Determine level based on performance (out of 5 questions)
+        if correct_count >= 4:
             level = "Advanced"
             color = "🟢"
             explanation = "You have strong foundational knowledge and are ready for advanced topics!"
-        elif correct_count == 2:
+        elif correct_count >= 3:
             level = "Intermediate"
             color = "🟡"
             explanation = "You have good understanding and can handle intermediate concepts!"
@@ -399,7 +291,7 @@ def render_initial_assessment(tutor_agent, qbank, profile_manager, student_id):
         st.session_state.assessment_complete = True
         
         # Display level
-        st.metric("Your Level", f"{color} {level}", f"Score: {correct_count}/3")
+        st.metric("Your Level", f"{color} {level}", f"Score: {correct_count}/5")
         st.write(f"**Analysis:** {explanation}")
         
         # Show performance breakdown
@@ -422,7 +314,7 @@ def render_initial_assessment(tutor_agent, qbank, profile_manager, student_id):
             # Build recent performance from assessment
             recent_performance = {}
             for concept in course.concepts:
-                recent_acc = correct_count / 3 if len(st.session_state.assessment_responses) > 0 else 0.5
+                recent_acc = correct_count / 5 if len(st.session_state.assessment_responses) > 0 else 0.5
                 recent_performance[concept] = recent_acc
             
             learning_session = orchestrator.create_personalized_learning_session(
@@ -440,6 +332,131 @@ def render_initial_assessment(tutor_agent, qbank, profile_manager, student_id):
             st.error(f"❌ Error generating learning path: {str(e)}")
             if st.button("Try Again"):
                 st.rerun()
+        return
+    
+    # Still have more questions to answer
+    current_idx = len(st.session_state.assessment_responses)
+    difficulty = assessment_difficulties[current_idx]
+    
+    # Load or generate the current question (cache it to avoid regenerating)
+    if st.session_state.current_question_for_assessment is None or st.session_state.current_question_for_assessment.get('_question_idx', -1) != current_idx:
+        # Generate new question only if we don't have one cached or the index changed
+        st.write("🤖 Generating AI question...")
+        try:
+            question_data = tutor_agent.generate_quiz_question(
+                concept=st.session_state.selected_subject,
+                difficulty=difficulty,
+                mastery_level=0.5
+            )
+        except Exception as e:
+            st.error(f"❌ Error generating question: {e}")
+            st.write("Using fallback question...")
+            
+            # Fallback question
+            question_data = {
+                "question": f"What is a key aspect of {st.session_state.selected_subject}?",
+                "options": ["Implementation", "Theory", "Practice", "Examples"],
+                "correct_answer": "Practice",
+                "explanation": "Practice is essential for mastering any concept."
+            }
+        
+        # Add index tracking to question data
+        question_data['_question_idx'] = current_idx
+        # Cache the question
+        st.session_state.current_question_for_assessment = question_data
+    else:
+        # Use cached question
+        question_data = st.session_state.current_question_for_assessment
+    
+    # Don't show the form/question if we're already showing feedback
+    if not st.session_state.showing_assessment_feedback:
+        st.markdown("---")
+        
+        # Display question prominently
+        st.markdown(f"### 📋 Question {current_idx + 1}")
+        st.warning(f"**{question_data['question']}**")
+        st.info(f"**Difficulty:** {difficulty}")
+        
+        st.markdown("---")
+        
+        # Answer selection using a form
+        st.markdown("### Select Your Answer")
+        with st.form(key=f"assessment_form_{current_idx}", clear_on_submit=False):
+            answer = st.radio(
+                "Choose the best answer:",
+                question_data['options'],
+                key=f"assessment_answer_{current_idx}"
+            )
+            
+            # Buttons
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                submit_button = st.form_submit_button("✓ Submit Answer", use_container_width=True, type="primary")
+            
+            with col2:
+                hint_button = st.form_submit_button("ℹ️ Show Hint", use_container_width=True)
+            
+            if submit_button:
+                # Save the submitted answer and mark feedback should be shown
+                st.session_state.assessment_answer_submitted = answer
+                st.session_state.showing_assessment_feedback = True
+                # Store the question that was answered
+                st.session_state.current_assessment_question = question_data
+                st.rerun()
+            
+            if hint_button:
+                st.info(f"💡 **Hint:** Consider the key aspects of {st.session_state.selected_subject} and how they apply in practice.")
+    
+    # Show feedback if answer was submitted
+    if st.session_state.showing_assessment_feedback and st.session_state.assessment_answer_submitted:
+        st.markdown("---")
+        
+        # Use the question that was actually answered
+        question_data = st.session_state.current_assessment_question
+        student_answer = st.session_state.assessment_answer_submitted
+        is_correct = (student_answer == question_data['correct_answer'])
+        
+        # Display correct/incorrect feedback
+        if is_correct:
+            st.success("✅ **Correct!**")
+            st.markdown(f"Great job! You selected the right answer.")
+        else:
+            st.error("❌ **Incorrect**")
+            st.markdown(f"""
+I can see you're making an effort to understand this topic, and that's something to be proud of. Your answer, "{student_answer}," isn't quite correct because the question is asking about {st.session_state.selected_subject}. Let's focus on understanding the key concepts better to improve your understanding.
+            """)
+        
+        # Display correct answer
+        st.markdown("---")
+        st.info(f"**Correct Answer:** {question_data['correct_answer']}")
+        
+        # Display explanation
+        explanation = str(question_data.get('explanation', 'No explanation available.')).split('main()')[0].strip()
+        st.markdown(f"**Explanation:** {explanation}")
+        
+        st.markdown("---")
+        
+        # Next question button
+        if st.button("📝 Next Question →", use_container_width=True, type="primary", key=f"next_assessment_{current_idx}"):
+            # Save response
+            st.session_state.assessment_responses.append({
+                'question_id': f'assess_{current_idx + 1}',
+                'difficulty': difficulty,
+                'correct': is_correct,
+                'question': str(question_data['question']),
+                'student_answer': student_answer,
+                'correct_answer': str(question_data['correct_answer']),
+                'explanation': explanation
+            })
+            
+            # Reset feedback state
+            st.session_state.showing_assessment_feedback = False
+            st.session_state.assessment_answer_submitted = None
+            st.session_state.current_assessment_question = None
+            st.session_state.current_question_for_assessment = None  # Clear cache for next question
+            st.rerun()
+
 
 
 def render_learning_path_post_assessment():
@@ -1684,15 +1701,15 @@ def render_analytics(profile_manager, student_id):
         # Show quiz statistics
         col1, col2, col3 = st.columns(3)
         with col1:
-            total_quiz_questions = len(st.session_state.quiz_responses)
-            st.metric("Quiz Questions Answered", total_quiz_questions)
+            total_quiz_q = len(st.session_state.quiz_responses)
+            st.metric("Quiz Questions Answered", total_quiz_q)
         
         with col2:
             quiz_correct = sum(1 for r in st.session_state.quiz_responses if r['correct'])
             st.metric("Correct Answers", quiz_correct)
         
         with col3:
-            quiz_accuracy = (quiz_correct / total_quiz_questions * 100) if total_quiz_questions > 0 else 0
+            quiz_accuracy = (quiz_correct / total_quiz_q * 100) if total_quiz_q > 0 else 0
             st.metric("Quiz Accuracy", f"{quiz_accuracy:.1f}%")
         
         st.markdown("---")
@@ -1964,7 +1981,7 @@ def main():
     """Main Streamlit app"""
     
     # Initialize session
-    manager = TutorSessionManager()
+    session_manager = TutorSessionManager()
     
     # Check if user is logged in
     if not st.session_state.logged_in:
@@ -2015,7 +2032,7 @@ def main():
         render_initial_assessment(tutor_agent, qbank, profile_manager, st.session_state.student_id)
         return
     
-    # If structured learning flow should be displayed (NEW - after assessment)
+    # If structured learning flow should be displayed (after assessment)
     if st.session_state.learning_path_displayed:
         render_structured_learning_flow()
         return
