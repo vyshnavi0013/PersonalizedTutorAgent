@@ -324,6 +324,16 @@ def render_initial_assessment(tutor_agent, profile_manager, student_id):
         
         st.markdown("---")
         
+        # Initialize hint storage in session state if not present
+        if 'assessment_hint_shown' not in st.session_state:
+            st.session_state.assessment_hint_shown = {}
+        if 'assessment_hints' not in st.session_state:
+            st.session_state.assessment_hints = {}
+        
+        # Display hint if it has been generated
+        if current_idx in st.session_state.assessment_hints:
+            st.success(f"💡 **Hint:** {st.session_state.assessment_hints[current_idx]}")
+        
         # Answer selection using a form
         st.markdown("### Select Your Answer")
         with st.form(key=f"assessment_form_{current_idx}", clear_on_submit=False):
@@ -351,7 +361,22 @@ def render_initial_assessment(tutor_agent, profile_manager, student_id):
                 st.rerun()
             
             if hint_button:
-                st.info(f"💡 **Hint:** Consider the key aspects of {st.session_state.selected_subject} and how they apply in practice.")
+                # Generate AI hint specific to the question
+                if current_idx not in st.session_state.assessment_hints:
+                    try:
+                        generated_hint = tutor_agent.generate_hint(
+                            concept=st.session_state.selected_subject,
+                            question=question_data['question'],
+                            student_attempt="",
+                            hint_level=1,
+                            attempt_number=1
+                        )
+                        st.session_state.assessment_hints[current_idx] = generated_hint
+                    except Exception as e:
+                        logger.error(f"Error generating hint: {e}")
+                        st.session_state.assessment_hints[current_idx] = f"💡 Think about the key concepts of {st.session_state.selected_subject} and how they relate to this question."
+                
+                st.rerun()
     
     # Show feedback if answer was submitted
     if st.session_state.showing_assessment_feedback and st.session_state.assessment_answer_submitted:
@@ -382,8 +407,11 @@ I can see you're making an effort to understand this topic, and that's something
         
         st.markdown("---")
         
-        # Next question button
-        if st.button("📝 Next Question →", use_container_width=True, type="primary", key=f"next_assessment_{current_idx}"):
+        # Next question button or Generate Learning Path for 5th question
+        is_last_question = (current_idx == 4)  # 5th question (0-indexed)
+        button_text = "🚀 Generate Learning Path" if is_last_question else "📝 Next Question →"
+        
+        if st.button(button_text, use_container_width=True, type="primary", key=f"next_assessment_{current_idx}"):
             # Save response
             st.session_state.assessment_responses.append({
                 'question_id': f'assess_{current_idx + 1}',
@@ -400,6 +428,7 @@ I can see you're making an effort to understand this topic, and that's something
             st.session_state.assessment_answer_submitted = None
             st.session_state.current_assessment_question = None
             st.session_state.current_question_for_assessment = None  # Clear cache for next question
+            # Don't clear hints in case user wants to review them
             st.rerun()
 
 
