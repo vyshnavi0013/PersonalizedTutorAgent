@@ -86,6 +86,7 @@ class TutorSessionManager:
         st.session_state.learning_path_displayed = False
         st.session_state.quiz_started = False
         st.session_state.quiz_responses = []
+        st.session_state.quiz_concept = None  # Track which topic's quiz is being taken
         st.session_state.learning_session = None
         st.session_state.recent_performance = {}
         st.session_state.learning_materials_viewed = []
@@ -98,7 +99,12 @@ class TutorSessionManager:
         # Structured learning session state
         st.session_state.structured_learning_session = None
         st.session_state.current_topic_step = "explanation"  # explanation, examples, quiz_prompt, quiz, completed
+        # Learning Path tracking
+        st.session_state.current_concept_idx = 0  # Track which concept user is on
+        st.session_state.concepts_list = []  # List of 10 concepts for current level/subject
+        st.session_state.concept_completion_status = {}  # Track completion status per concept
         st.session_state.quiz_question_index = 0
+        st.session_state.current_page = None  # Track current page for button-based navigation (None = use sidebar)
         st.session_state.quiz_topic_responses = []
         st.session_state.quiz_questions = []
 
@@ -335,14 +341,16 @@ def render_initial_assessment(tutor_agent, qbank, profile_manager, student_id):
             
             st.markdown("---")
             
-            answer = st.radio(
-                "Choose the best answer:",
-                fallback_question['options'],
-                key=f"assessment_answer_{current_idx}"
-            )
-            
             # Answer submission using form
+            st.markdown("### Select Your Answer")
             with st.form(key=f"fallback_assessment_form_{current_idx}", clear_on_submit=False):
+                answer = st.radio(
+                    "Choose the best answer:",
+                    fallback_question['options'],
+                    key=f"assessment_answer_{current_idx}"
+                )
+                
+                # Buttons
                 col1, col2 = st.columns(2)
                 with col1:
                     submit_button = st.form_submit_button("✓ Submit Answer", use_container_width=True, type="primary")
@@ -608,13 +616,29 @@ def render_structured_learning_flow():
         learning_manager = StructuredLearningManager(content_generator)
         
         # Create or retrieve session
+        selected_concept_idx = None
+        
         if not st.session_state.structured_learning_session:
+            # No session exists, create new one
             session = learning_manager.create_session(
                 subject=st.session_state.selected_subject,
                 student_level=st.session_state.student_level.lower() if st.session_state.student_level else "beginner"
             )
             st.session_state.structured_learning_session = session
+        elif isinstance(st.session_state.structured_learning_session, dict):
+            # This is a dict from concept selection in Learning Path - convert to proper session
+            selected_concept_idx = st.session_state.structured_learning_session.get('concept_index', 0)
+            session = learning_manager.create_session(
+                subject=st.session_state.selected_subject,
+                student_level=st.session_state.student_level.lower() if st.session_state.student_level else "beginner"
+            )
+            # Move to the selected concept
+            if selected_concept_idx > 0 and selected_concept_idx < len(session.topics):
+                # Skip to the selected topic by updating completed_topics counter
+                session.completed_topics = selected_concept_idx
+            st.session_state.structured_learning_session = session
         else:
+            # Proper session object exists
             session = st.session_state.structured_learning_session
         
         # Check if all topics are completed
@@ -729,6 +753,13 @@ def render_structured_learning_flow():
                 if st.button("⏭️ Skip Quiz", use_container_width=True, key="skip_quiz"):
                     learning_manager.record_quiz_completion(session, quiz_taken=False)
                     session.move_to_next_topic()
+                    
+                    # Update concept tracking
+                    if st.session_state.concepts_list and st.session_state.current_concept_idx < len(st.session_state.concepts_list):
+                        current_topic_obj = st.session_state.concepts_list[st.session_state.current_concept_idx]
+                        st.session_state.concept_completion_status[current_topic_obj.id] = True
+                        st.session_state.current_concept_idx += 1
+                    
                     st.session_state.current_topic_step = "explanation"
                     st.rerun()
             
@@ -803,17 +834,27 @@ def render_structured_learning_flow():
                 st.markdown("---")
                 st.write(f"### {question_data['question']}")
                 
-                # Display options
-                selected_answer = st.radio(
-                    "Choose your answer:",
-                    question_data['options'],
-                    key=f"quiz_q_{current_q_idx}"
-                )
+                st.markdown("---")
                 
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    if st.button("✓ Submit Answer", use_container_width=True, key=f"submit_q_{current_q_idx}"):
+                # Display options in form to properly manage state
+                with st.form(key=f"topic_quiz_form_{current_q_idx}", clear_on_submit=False):
+                    selected_answer = st.radio(
+                        "Choose your answer:",
+                        question_data['options'],
+                        key=f"quiz_q_{current_q_idx}"
+                    )
+                    
+                    st.markdown("---")
+                    
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        submit_button = st.form_submit_button("✓ Submit Answer", use_container_width=True, type="primary")
+                    
+                    with col2:
+                        skip_button = st.form_submit_button("⏭️ Skip Question", use_container_width=True)
+                    
+                    if submit_button:
                         is_correct = selected_answer == question_data['correct_answer']
                         st.session_state.quiz_topic_responses.append({
                             'question': question_data['question'],
@@ -831,9 +872,8 @@ def render_structured_learning_flow():
                         st.session_state.quiz_question_index += 1
                         time.sleep(1.5)
                         st.rerun()
-                
-                with col2:
-                    if st.button("⏭️ Skip Question", use_container_width=True, key=f"skip_q_{current_q_idx}"):
+                    
+                    if skip_button:
                         st.session_state.quiz_topic_responses.append({
                             'question': question_data['question'],
                             'answer': 'skipped',
@@ -892,6 +932,12 @@ def render_structured_learning_flow():
                 col1, col2 = st.columns(2)
                 with col1:
                     if st.button("➡️ Next Topic", use_container_width=True, key="next_topic_btn"):
+                        # Update concept tracking before moving to next
+                        if st.session_state.concepts_list and st.session_state.current_concept_idx < len(st.session_state.concepts_list):
+                            current_topic_obj = st.session_state.concepts_list[st.session_state.current_concept_idx]
+                            st.session_state.concept_completion_status[current_topic_obj.id] = True
+                            st.session_state.current_concept_idx += 1
+                        
                         session.move_to_next_topic()
                         st.session_state.current_topic_step = "explanation"
                         st.session_state.quiz_question_index = 0
@@ -926,8 +972,9 @@ def render_dashboard_post_assessment():
         with col2:
             st.metric("📊 Your Level", st.session_state.student_level)
         with col3:
-            materials_completed = len(st.session_state.learning_materials_viewed)
-            st.metric("✅ Materials Completed", materials_completed)
+            # Calculate concepts completed
+            concepts_completed = sum(1 for v in st.session_state.concept_completion_status.values() if v)
+            st.metric("✅ Concepts Completed", concepts_completed)
         
         st.markdown("---")
         
@@ -936,18 +983,28 @@ def render_dashboard_post_assessment():
         col1, col2, col3 = st.columns(3)
         
         with col1:
-            if st.button("📚 View Learning Path", use_container_width=True):
-                st.session_state.learning_path_displayed = True
+            if st.button("▶️ Continue Learning", use_container_width=True):
+                # Get the current concept to resume from
+                if st.session_state.concepts_list:
+                    current_topic = st.session_state.concepts_list[st.session_state.current_concept_idx]
+                    st.session_state.structured_learning_session = {
+                        'topic': current_topic,
+                        'concept_index': st.session_state.current_concept_idx,
+                        'started_at': str(pd.Timestamp.now())
+                    }
+                    st.session_state.current_topic_step = "explanation"
+                    st.session_state.learning_path_displayed = True
                 st.rerun()
         
         with col2:
             if st.button("📝 Take a Quiz", use_container_width=True):
-                st.session_state.quiz_started = True
+                st.session_state.current_page = "Interactive Quiz"
                 st.rerun()
         
         with col3:
-            if st.button("📊 View Analytics", use_container_width=True):
-                pass  # Navigate to analytics
+            if st.button("🛤️ View All Concepts", use_container_width=True):
+                st.session_state.current_page = "Learning Path"
+                st.rerun()
         
         st.markdown("---")
         
@@ -962,6 +1019,18 @@ def render_dashboard_post_assessment():
             **Estimated Remaining Time:** ⏱️ {session['estimated_total_time']} minutes
             
             **Next Topics:** {', '.join([item['recommendation'].concept.capitalize() for item in session['learning_materials'][:3]])}
+            """)
+        
+        # Show current concept info
+        if st.session_state.concepts_list and len(st.session_state.concepts_list) > 0:
+            current_topic = st.session_state.concepts_list[st.session_state.current_concept_idx]
+            st.subheader("📚 Current Learning Path")
+            st.info(f"""
+            **Current Topic:** {current_topic.name}
+            
+            **Description:** {current_topic.description}
+            
+            **Progress:** {st.session_state.current_concept_idx + 1}/{len(st.session_state.concepts_list)} concepts
             """)
     
     except Exception as e:
@@ -993,8 +1062,9 @@ def render_sidebar():
     
     page = st.sidebar.radio(
         "Navigation",
-        ["Dashboard", "Interactive Quiz", "Learning Path", "Student Analytics", "System Info"],
-        disabled=not st.session_state.assessment_complete
+        ["Dashboard", "Interactive Quiz", "Learning Path", "Student Analytics", "Learning Overview"],
+        disabled=not st.session_state.assessment_complete,
+        key="sidebar_nav_radio"
     )
     
     st.sidebar.markdown("---")
@@ -1137,50 +1207,132 @@ def render_dashboard(profile_manager, dkt, path_manager, student_id):
 
 
 def render_quiz(qbank, student_id, profile_manager, tutor_agent):
-    """Render interactive quiz"""
-    st.title("📝 Adaptive Quiz")
+    """Render interactive quiz with topic-based unlocking"""
+    st.title("📝 Interactive Quiz")
     
-    profile = profile_manager.get_or_create_profile(student_id)
-    knowledge = profile.get_knowledge_state_vector()
+    # Get concepts for current subject and level
+    subject = st.session_state.selected_subject
+    level = st.session_state.student_level
     
-    # Quiz setup
-    col1, col2 = st.columns(2)
+    if not subject or not level:
+        st.warning("⚠️ Please complete the assessment first to take a quiz.")
+        return
     
-    with col1:
-        concept = st.selectbox(
-            "Select Concept to Practice",
-            list(knowledge.keys())
-        )
+    # Get the curriculum concepts for this subject and level
+    from src.curriculum import Curriculum
     
-    with col2:
-        difficulty_adaptor = DifficultyAdaptor('Medium')
-        st.info(f"Current Difficulty: {difficulty_adaptor.current_difficulty}")
+    curriculum_data = None
+    if subject == "Mathematics":
+        curriculum_data = Curriculum.MATHEMATICS.get(level.lower())
+    elif subject == "Physics":
+        curriculum_data = Curriculum.PHYSICS.get(level.lower())
+    elif subject == "Chemistry":
+        curriculum_data = Curriculum.CHEMISTRY.get(level.lower())
     
-    # Quiz controls
+    if not curriculum_data:
+        st.error(f"❌ No curriculum found for {subject} at {level} level.")
+        return
+    
+    # Update session concepts list if not already done
+    if not st.session_state.concepts_list:
+        st.session_state.concepts_list = curriculum_data
+    
+    # Initialize completion status if empty
+    if not st.session_state.concept_completion_status:
+        st.session_state.concept_completion_status = {topic.id: False for topic in curriculum_data}
+    
+    # Display quiz overview
     col1, col2, col3 = st.columns(3)
-    
     with col1:
-        if st.button("Start New Quiz"):
-            st.session_state.quiz_started = True
-            st.session_state.quiz_responses = []
-            st.session_state.current_question_idx = 0
-            st.session_state.current_question_data = None
-            st.rerun()
-    
+        st.metric("📚 Subject", subject)
     with col2:
-        st.metric("Questions Attempted", len(st.session_state.quiz_responses))
-    
+        st.metric("📊 Level", level)
     with col3:
-        if st.session_state.quiz_responses:
-            accuracy = np.mean([r['correct'] for r in st.session_state.quiz_responses])
-            st.metric("Current Accuracy", f"{accuracy:.1%}")
+        completed = sum(1 for v in st.session_state.concept_completion_status.values() if v)
+        st.metric("✅ Completed", f"{completed}/{len(curriculum_data)}")
     
     st.markdown("---")
     
-    st.write(f"🔵 Quiz Started: {st.session_state.quiz_started}")
-    st.write(f"📊 Questions Completed: {len(st.session_state.quiz_responses)}")
+    # If quiz is not started, show topic selection
+    if not st.session_state.quiz_started:
+        st.subheader("📖 Select a Topic to Take Quiz")
+        st.markdown("Complete topics in order to unlock new quizzes")
+        
+        # Display all topics with quiz buttons
+        for idx, topic in enumerate(curriculum_data, 1):
+            col1, col2, col3 = st.columns([3, 1, 1])
+            
+            is_completed = st.session_state.concept_completion_status.get(topic.id, False)
+            is_current = len(st.session_state.concepts_list) > 0 and topic.id == st.session_state.concepts_list[st.session_state.current_concept_idx].id
+            topic_index = idx - 1  # 0-based index
+            current_index = st.session_state.current_concept_idx
+            
+            # Determine status icon
+            if is_current:
+                status_icon = "▶️"
+            elif is_completed:
+                status_icon = "✅"
+            else:
+                status_icon = "⭕"
+            
+            with col1:
+                display_text = f"{status_icon} [**{idx}**] {topic.name}"
+                st.write(display_text)
+            
+            with col2:
+                st.write(f"*{topic.level.capitalize()}*")
+            
+            with col3:
+                # Determine button text and behaviour based on status
+                if is_current:
+                    # Current topic - show Take Quiz button
+                    if st.button(f"📝 Take Quiz", use_container_width=True, key=f"quiz_btn_{topic.id}"):
+                        st.session_state.quiz_started = True
+                        st.session_state.quiz_concept = topic.name
+                        st.session_state.quiz_responses = []
+                        st.session_state.current_question_data = None
+                        st.rerun()
+                
+                elif is_completed:
+                    # Completed topic - show Retake Quiz button
+                    if st.button(f"🔄 Retake Quiz", use_container_width=True, key=f"quiz_btn_{topic.id}"):
+                        st.session_state.quiz_started = True
+                        st.session_state.quiz_concept = topic.name
+                        st.session_state.quiz_responses = []
+                        st.session_state.current_question_data = None
+                        st.rerun()
+                
+                else:
+                    # Topics not yet unlocked - show lock message
+                    st.button(f"🔒 Finish topic {current_index + 1}", use_container_width=True, disabled=True, key=f"quiz_btn_{topic.id}")
     
-    if st.session_state.quiz_started:
+    else:
+        # Quiz is in progress
+        profile = profile_manager.get_or_create_profile(student_id)
+        knowledge = profile.get_knowledge_state_vector()
+        concept = st.session_state.quiz_concept if hasattr(st.session_state, 'quiz_concept') else st.session_state.selected_subject
+        
+        st.subheader(f"🎯 Quiz: {concept}")
+        
+        # Quiz controls
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.metric("Questions Attempted", len(st.session_state.quiz_responses))
+        
+        with col2:
+            if st.session_state.quiz_responses:
+                accuracy = np.mean([r['correct'] for r in st.session_state.quiz_responses])
+                st.metric("Current Accuracy", f"{accuracy:.1%}")
+        
+        with col3:
+            if st.button("❌ End Quiz", use_container_width=True):
+                st.session_state.quiz_started = False
+                st.session_state.current_question_data = None
+                st.rerun()
+        
+        st.markdown("---")
+        
         # Determine difficulty based on performance
         if len(st.session_state.quiz_responses) == 0:
             difficulty = "Easy"
@@ -1213,13 +1365,11 @@ def render_quiz(qbank, student_id, profile_manager, tutor_agent):
         st.subheader(f"Question {len(st.session_state.quiz_responses) + 1}")
         
         # Question metadata
-        col1, col2, col3 = st.columns(3)
+        col1, col2 = st.columns(2)
         with col1:
-            st.metric("Concept", concept)
+            st.metric("Topic", concept)
         with col2:
             st.metric("Difficulty", difficulty)
-        with col3:
-            st.metric("Time Limit", "60s")
         
         st.markdown("---")
         
@@ -1329,109 +1479,250 @@ def render_quiz(qbank, student_id, profile_manager, tutor_agent):
             )
             st.markdown(summary)
             
-            if st.button("Take Another Quiz"):
-                st.session_state.quiz_started = False
-                st.rerun()
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("Take Another Quiz"):
+                    st.session_state.quiz_started = False
+                    st.rerun()
+            with col2:
+                if st.button("📊 Back to Dashboard"):
+                    st.session_state.current_page = "Dashboard"
+                    st.session_state.quiz_started = False
+                    st.rerun()
 
 
 def render_learning_path(path_manager, profile_manager, student_id):
-    """Render learning path"""
-    st.title("🛤️ Your Personalized Learning Path")
+    """Render learning path with all 10 concepts for the selected level"""
+    st.title("🛤️ Your Learning Path")
     
-    # If learning session exists from post-assessment, show it
-    if st.session_state.learning_session:
-        st.success("✅ Your personalized learning path is ready!")
-        render_learning_path_post_assessment()
+    # Get concepts for current subject and level
+    subject = st.session_state.selected_subject
+    level = st.session_state.student_level
+    
+    if not subject or not level:
+        st.warning("⚠️ Please complete the assessment first to see your learning path.")
         return
     
-    # Otherwise show the general learning path
-    profile = profile_manager.get_or_create_profile(student_id)
-    knowledge = profile.get_knowledge_state_vector()
+    # Get the curriculum concepts for this subject and level
+    from src.curriculum import Curriculum
     
-    if not knowledge:
-        st.warning("⚠️ Complete an assessment first to generate a learning path.")
+    curriculum_data = None
+    if subject == "Mathematics":
+        curriculum_data = Curriculum.MATHEMATICS.get(level.lower())
+    elif subject == "Physics":
+        curriculum_data = Curriculum.PHYSICS.get(level.lower())
+    elif subject == "Chemistry":
+        curriculum_data = Curriculum.CHEMISTRY.get(level.lower())
+    
+    if not curriculum_data:
+        st.error(f"❌ No curriculum found for {subject} at {level} level.")
         return
     
-    # Path generator
-    path_gen = LearningPathGenerator(
-        list(knowledge.keys()),
-        concept_difficulty={c: np.random.uniform(0.2, 0.8) for c in knowledge.keys()}
-    )
+    # Update session concepts list
+    if not st.session_state.concepts_list:
+        st.session_state.concepts_list = curriculum_data
     
-    # Generate path
-    weak_concepts = profile.get_weak_concepts(n=3)
-    path = path_gen.generate_path(
-        knowledge,
-        weak_concepts=weak_concepts,
-        num_concepts=5,
-        learning_preference='balanced'
-    )
+    # Initialize completion status if empty
+    if not st.session_state.concept_completion_status:
+        st.session_state.concept_completion_status = {topic.id: False for topic in curriculum_data}
     
-    if path:
-        st.subheader("Recommended Learning Sequence")
+    # Display learning path overview
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("📚 Subject", subject)
+    with col2:
+        st.metric("📊 Level", level)
+    with col3:
+        completed = sum(1 for v in st.session_state.concept_completion_status.values() if v)
+        st.metric("✅ Completed", f"{completed}/{len(curriculum_data)}")
+    
+    st.markdown("---")
+    
+    # Display all 10 concepts as selectable items
+    st.subheader("📖 Your Concepts (10 Topics)")
+    st.markdown("Click on any concept to start learning or continue where you left off")
+    
+    # Create a grid/list of concepts
+    for idx, topic in enumerate(curriculum_data, 1):
+        col1, col2, col3 = st.columns([3, 1, 1])
         
-        for node in path:
-            col1, col2, col3, col4, col5 = st.columns(5)
-            
-            with col1:
-                st.metric("Position", node['position'])
-            
-            with col2:
-                st.write(f"**{node['concept']}**")
-            
-            with col3:
-                st.progress(node['current_mastery'], 
-                           text=f"Mastery: {node['current_mastery']:.0%}")
-            
-            with col4:
-                st.write(f"**{node['bloom_level']}**")
-            
-            with col5:
-                st.write(f"⏱️ {node['estimated_time']}m")
-            
-            # Resources
-            with st.expander("View Resources & Details"):
-                st.write("**Recommended Resources:**")
-                for resource in node['resources']:
-                    st.write(f"• {resource}")
-                st.write(f"**Prerequisites:** {', '.join(node['prerequisites']) or 'None'}")
+        is_completed = st.session_state.concept_completion_status.get(topic.id, False)
+        is_current = len(st.session_state.concepts_list) > 0 and topic.id == st.session_state.concepts_list[st.session_state.current_concept_idx].id
+        topic_index = idx - 1  # 0-based index
+        current_index = st.session_state.current_concept_idx
         
-        # Path summary
-        st.markdown("---")
-        total_time = path_gen.estimate_path_duration(path)
-        st.info(f"⏱️ Estimated time to complete path: **{total_time} minutes** (~{total_time/60:.1f} hours)")
-    else:
-        st.warning("No learning path available. Start by taking a quiz!")
+        # Determine status icon
+        if is_current:
+            status_icon = "▶️"
+            status_text = "Current"
+        elif is_completed:
+            status_icon = "✅"
+            status_text = "Completed"
+        else:
+            status_icon = "⭕"
+            status_text = "Locked"
+        
+        with col1:
+            display_text = f"{status_icon} [**{idx}**] {topic.name}"
+            st.write(display_text)
+        
+        with col2:
+            st.write(f"*{topic.level.capitalize()}*")
+        
+        with col3:
+            # Determine button text and behaviour based on status
+            if is_current:
+                # Current topic - show Resume button
+                if st.button(f"▶️ Resume", use_container_width=True, key=f"concept_btn_{topic.id}"):
+                    concept_index = topic_index
+                    st.session_state.current_concept_idx = concept_index
+                    st.session_state.structured_learning_session = {
+                        'topic': topic,
+                        'concept_index': concept_index,
+                        'started_at': str(pd.Timestamp.now())
+                    }
+                    st.session_state.current_topic_step = "explanation"
+                    st.session_state.learning_path_displayed = True
+                    st.rerun()
+            
+            elif is_completed:
+                # Completed topic - show Review button
+                if st.button(f"📖 Review", use_container_width=True, key=f"concept_btn_{topic.id}"):
+                    concept_index = topic_index
+                    st.session_state.current_concept_idx = concept_index
+                    st.session_state.structured_learning_session = {
+                        'topic': topic,
+                        'concept_index': concept_index,
+                        'started_at': str(pd.Timestamp.now())
+                    }
+                    st.session_state.current_topic_step = "explanation"
+                    st.session_state.learning_path_displayed = True
+                    st.rerun()
+            
+            elif topic_index == current_index + 1:
+                # Next topic - show unlock message
+                st.button(f"🔒 Finish topic {current_index + 1}", use_container_width=True, disabled=True, key=f"concept_btn_{topic.id}")
+            
+            else:
+                # Topics further ahead - show unlock message
+                # All future topics show same unlock requirement: finish current topic
+                st.button(f"🔒 Finish topic {current_index + 1}", use_container_width=True, disabled=True, key=f"concept_btn_{topic.id}")
+    
+    st.markdown("---")
+    
+    # Progress summary
+    st.subheader("📈 Progress Summary")
+    concepts_completed = sum(1 for v in st.session_state.concept_completion_status.values() if v)
+    concepts_total = len(curriculum_data)
+    progress_pct = (concepts_completed / concepts_total * 100) if concepts_total > 0 else 0
+    
+    st.progress(concepts_completed / concepts_total, text=f"Overall Progress: {progress_pct:.0f}%")
+    st.write(f"**{concepts_completed} of {concepts_total}** concepts completed")
+    
+    st.markdown("---")
+    
+    # Navigation back to dashboard
+    if st.button("📊 Back to Dashboard", use_container_width=True):
+        st.session_state.current_page = "Dashboard"
+        st.rerun()
 
 
 def render_analytics(profile_manager, student_id):
-    """Render student analytics"""
+    """Render student analytics with real-time data"""
     st.title("📈 Student Analytics")
     
     profile = profile_manager.get_or_create_profile(student_id)
     knowledge = profile.get_knowledge_state_vector()
     
     # Overview
-    st.subheader("Student Profile Summary")
+    st.subheader("📊 Student Profile Summary")
     
     col1, col2, col3 = st.columns(3)
     
     with col1:
-        st.write(f"**Total Questions:** {int(profile.overall_metrics['total_questions'])}")
-        st.write(f"**Correct Answers:** {int(profile.overall_metrics['total_correct'])}")
+        st.metric("Total Questions", int(profile.overall_metrics['total_questions']))
+        st.metric("Correct Answers", int(profile.overall_metrics['total_correct']))
     
     with col2:
-        st.write(f"**Accuracy:** {profile.overall_metrics['average_accuracy']:.1%}")
-        st.write(f"**Avg Mastery:** {np.mean(list(knowledge.values())):.1%}")
+        st.metric("Overall Accuracy", f"{profile.overall_metrics['average_accuracy']:.1%}")
+        st.metric("Avg Mastery", f"{np.mean(list(knowledge.values())):.1%}")
     
     with col3:
         time_hours = profile.overall_metrics['total_time_spent'] / 3600
-        st.write(f"**Time Invested:** {time_hours:.1f} hours")
+        st.metric("Time Invested", f"{time_hours:.1f} hours")
     
     st.markdown("---")
     
-    # Concept mastery heatmap
-    st.subheader("Concept Mastery Heatmap")
+    # Learning Progress from actual quiz responses
+    st.subheader("📈 Your Learning Progress")
+    
+    if st.session_state.quiz_responses:
+        # Create progress data from actual quiz responses
+        quiz_data = []
+        cumulative_correct = 0
+        for idx, response in enumerate(st.session_state.quiz_responses, 1):
+            cumulative_correct += response['correct']
+            accuracy = (cumulative_correct / idx) * 100
+            quiz_data.append({
+                'Question': idx,
+                'Accuracy': accuracy,
+                'Status': 'Correct' if response['correct'] else 'Incorrect',
+                'Concept': response['concept'],
+                'Difficulty': response['difficulty']
+            })
+        
+        progress_df = pd.DataFrame(quiz_data)
+        
+        # Line chart for cumulative accuracy
+        fig = px.line(progress_df, x='Question', y='Accuracy',
+                      title='Your Cumulative Accuracy Over Time',
+                      markers=True,
+                      color_discrete_sequence=['#2E86AB'])
+        fig.update_layout(yaxis_title="Accuracy (%)", xaxis_title="Question Number")
+        st.plotly_chart(fig, use_container_width=True)
+        
+        # Show quiz statistics
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            total_quiz_questions = len(st.session_state.quiz_responses)
+            st.metric("Quiz Questions Answered", total_quiz_questions)
+        
+        with col2:
+            quiz_correct = sum(1 for r in st.session_state.quiz_responses if r['correct'])
+            st.metric("Correct Answers", quiz_correct)
+        
+        with col3:
+            quiz_accuracy = (quiz_correct / total_quiz_questions * 100) if total_quiz_questions > 0 else 0
+            st.metric("Quiz Accuracy", f"{quiz_accuracy:.1f}%")
+        
+        st.markdown("---")
+        
+        # Concept-wise performance
+        st.subheader("📚 Performance by Topic")
+        concept_stats = []
+        for concept in set([r['concept'] for r in st.session_state.quiz_responses]):
+            concept_responses = [r for r in st.session_state.quiz_responses if r['concept'] == concept]
+            correct = sum(1 for r in concept_responses if r['correct'])
+            total = len(concept_responses)
+            accuracy = (correct / total * 100) if total > 0 else 0
+            concept_stats.append({
+                'Topic': concept,
+                'Questions': total,
+                'Correct': correct,
+                'Accuracy': f"{accuracy:.1f}%"
+            })
+        
+        if concept_stats:
+            concept_df = pd.DataFrame(concept_stats)
+            st.dataframe(concept_df, use_container_width=True)
+    
+    else:
+        st.info("📝 No quiz responses yet. Start taking quizzes to see your learning progress!")
+    
+    st.markdown("---")
+    
+    # Concept mastery heatmap (from learning sessions)
+    st.subheader("🎯 Concept Mastery Status")
     
     concepts = list(knowledge.keys())
     masteries = [knowledge[c] for c in concepts]
@@ -1441,28 +1732,46 @@ def render_analytics(profile_manager, student_id):
         x=concepts,
         colorscale='RdYlGn',
         zmin=0,
-        zmax=1
+        zmax=1,
+        text=[[f"{m:.0%}" for m in masteries]],
+        texttemplate="%{text}",
+        showscale=True,
+        colorbar=dict(title="Mastery")
     ))
-    fig.update_layout(height=200)
+    fig.update_layout(height=150)
     st.plotly_chart(fig, use_container_width=True)
     
-    # Progress over time (simulated)
-    st.subheader("Learning Progress Simulation")
+    st.markdown("---")
     
-    progress_df = pd.DataFrame({
-        'Question': range(1, 21),
-        'Cumulative Accuracy': np.cumsum(np.random.binomial(1, 0.65, 20)) / np.arange(1, 21)
-    })
+    # Learning path progress
+    st.subheader("🛤️ Learning Path Progress")
     
-    fig = px.line(progress_df, x='Question', y='Cumulative Accuracy',
-                  title='Cumulative Accuracy Over Time',
-                  markers=True)
-    st.plotly_chart(fig, use_container_width=True)
+    concepts_completed = sum(1 for v in st.session_state.concept_completion_status.values() if v)
+    concepts_total = len(st.session_state.concepts_list) if st.session_state.concepts_list else 10
+    
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Topics Completed", concepts_completed)
+    with col2:
+        st.metric("Current Topic", st.session_state.current_concept_idx + 1)
+    with col3:
+        progress_pct = (concepts_completed / concepts_total * 100) if concepts_total > 0 else 0
+        st.metric("Completion", f"{progress_pct:.0f}%")
+    
+    # Progress bar
+    st.progress(concepts_completed / concepts_total if concepts_total > 0 else 0, 
+                text=f"Learning Path: {concepts_completed}/{concepts_total}")
+    
+    st.markdown("---")
+    
+    if st.button("📊 Back to Dashboard", use_container_width=True):
+        st.session_state.current_page = "Dashboard"
+        st.rerun()
 
 
 def render_system_info():
-    """Render system information"""
-    st.title("ℹ️ System Information")
+    """Render learning overview"""
+    st.title("📊 Learning Overview")
     
     st.subheader("Project Overview")
     st.markdown("""
@@ -1534,16 +1843,88 @@ def render_system_info():
     
     st.markdown("---")
     
-    st.subheader("Dataset Information")
-    st.markdown("""
-    **Synthetic Dataset Generated:**
-    - 50 students
-    - 8 learning concepts
-    - 80 unique questions
-    - 3,000 student-question interactions
+    st.subheader("📊 Current Session Information")
     
-    Fields: student_id, concept, question_id, difficulty, score, time_spent, attempt_no, timestamp
-    """)
+    # Display current student and session info
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Student Name", st.session_state.student_name or "N/A")
+        st.metric("Student ID", st.session_state.student_id)
+    
+    with col2:
+        st.metric("Selected Subject", st.session_state.selected_subject or "N/A")
+        st.metric("Student Level", st.session_state.student_level or "N/A")
+    
+    with col3:
+        st.metric("Assessment Complete", "✅ Yes" if st.session_state.assessment_complete else "❌ No")
+        quiz_count = len(st.session_state.quiz_responses) if st.session_state.quiz_responses else 0
+        st.metric("Quizzes Taken", quiz_count)
+    
+    st.markdown("---")
+    
+    st.subheader("📈 Learning Position")
+    
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        current_topic_num = st.session_state.current_concept_idx + 1 if st.session_state.concepts_list else 0
+        st.metric("Current Topic #", current_topic_num)
+        if st.session_state.concepts_list and st.session_state.current_concept_idx < len(st.session_state.concepts_list):
+            current_topic = st.session_state.concepts_list[st.session_state.current_concept_idx]
+            st.write(f"📚 {current_topic.name}")
+    
+    with col2:
+        topics_completed = sum(1 for v in st.session_state.concept_completion_status.values() if v) if st.session_state.concept_completion_status else 0
+        total_topics = len(st.session_state.concepts_list) if st.session_state.concepts_list else 10
+        st.metric("Topics Completed", f"{topics_completed}/{total_topics}")
+    
+    with col3:
+        progress_pct = (topics_completed / total_topics * 100) if total_topics > 0 else 0
+        st.metric("Completion %", f"{progress_pct:.0f}%")
+    
+    st.markdown("---")
+    
+    st.subheader("🎯 Quiz Statistics")
+    
+    if st.session_state.quiz_responses:
+        col1, col2, col3 = st.columns(3)
+        
+        total_quiz_q = len(st.session_state.quiz_responses)
+        correct_q = sum(1 for r in st.session_state.quiz_responses if r['correct'])
+        quiz_acc = (correct_q / total_quiz_q * 100) if total_quiz_q > 0 else 0
+        
+        with col1:
+            st.metric("Questions Answered", total_quiz_q)
+        with col2:
+            st.metric("Correct Answers", correct_q)
+        with col3:
+            st.metric("Quiz Accuracy", f"{quiz_acc:.1f}%")
+        
+        # Quiz topics covered
+        st.markdown("**Topics in Quizzes:**")
+        quiz_topics = set([r['concept'] for r in st.session_state.quiz_responses])
+        st.write(", ".join(quiz_topics) if quiz_topics else "No quizzes taken yet")
+    else:
+        st.info("📝 No quizzes taken yet in this session")
+    
+    st.markdown("---")
+    
+    st.subheader("💾 Assessment Results")
+    
+    if st.session_state.assessment_responses:
+        assessment_df = pd.DataFrame({
+            'Question #': range(1, len(st.session_state.assessment_responses) + 1),
+            'Difficulty': [r['difficulty'] for r in st.session_state.assessment_responses],
+            'Status': ['✅ Correct' if r['correct'] else '❌ Incorrect' for r in st.session_state.assessment_responses]
+        })
+        st.dataframe(assessment_df, use_container_width=True)
+    else:
+        st.info("No assessment data available yet")
+    
+    st.markdown("---")
+    
+    if st.button("📊 Back to Dashboard", use_container_width=True):
+        st.session_state.current_page = "Dashboard"
+        st.rerun()
 
 
 def render_course_selection():
@@ -1645,7 +2026,24 @@ def main():
     #     return
     
     # Render sidebar (only after login and assessment)
-    page = render_sidebar()
+    sidebar_page = render_sidebar()
+    
+    # Initialize last sidebar page if not already done
+    if 'last_sidebar_page' not in st.session_state:
+        st.session_state.last_sidebar_page = sidebar_page
+    
+    # If sidebar selection changed, reset current_page so sidebar takes precedence
+    if sidebar_page != st.session_state.last_sidebar_page:
+        st.session_state.current_page = None
+    st.session_state.last_sidebar_page = sidebar_page
+    
+    # Determine which page to display
+    # Priority: current_page (from buttons) > sidebar selection
+    page = sidebar_page
+    
+    # If a button set current_page, use it
+    if st.session_state.current_page:
+        page = st.session_state.current_page
     
     # Route pages
     if page == "Dashboard":
@@ -1660,7 +2058,7 @@ def main():
     elif page == "Student Analytics":
         render_analytics(profile_manager, st.session_state.student_id)
     
-    elif page == "System Info":
+    elif page == "Learning Overview":
         render_system_info()
     
     # Footer

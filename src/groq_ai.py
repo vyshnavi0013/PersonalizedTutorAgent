@@ -405,6 +405,7 @@ Format as:
         """
         import random
         import time
+        import json
         
         # Add randomization to ensure variety
         random_seed = int(time.time() * 1000) % 10000
@@ -466,8 +467,6 @@ Requirements:
             response = self._call_groq(messages, max_tokens=800, temperature=1.2)
             
             # Parse JSON response
-            import json
-            
             # Clean up response (remove markdown if present)
             cleaned = response.strip()
             if cleaned.startswith("```json"):
@@ -544,7 +543,6 @@ Requirements:
                 }
             ]
             
-            import random
             return random.choice(fallback_questions)
         except Exception as e:
             logger.error(f"Error generating question: {e}")
@@ -588,5 +586,4 @@ Requirements:
                 }
             ]
             
-            import random
             return random.choice(fallback_questions)
