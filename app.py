@@ -22,7 +22,6 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 from learner_profiling import LearnerProfileManager
 from knowledge_tracing import SimplifiedDKT
 from learning_path import LearningPathGenerator, AdaptivePathManager
-from adaptive_quiz import AdaptiveQuizEngine, QuestionBank, DifficultyAdaptor
 from tutor_agent import PersonalizedTutorAgent
 from src.courses import CourseManager
 from learning_content import LearningContentGenerator, LearningPathOrchestrator
@@ -114,60 +113,6 @@ class TutorSessionManager:
         st.session_state.assessment_answer_submitted = None
 
 
-def create_mock_data():
-    """Create mock data for development/testing"""
-    # Mock student interactions
-    interactions_data = {
-        'student_id': [1, 1, 1, 2, 2, 2, 3, 3, 3, 4, 4, 4, 5, 5, 5],
-        'concept_id': ['algebra', 'algebra', 'geometry', 'algebra', 'calculus', 'geometry', 
-                       'algebra', 'statistics', 'calculus', 'geometry', 'calculus', 'statistics',
-                       'algebra', 'geometry', 'statistics'],
-        'question_id': [1, 2, 5, 3, 8, 6, 2, 10, 9, 5, 8, 10, 1, 6, 10],
-        'correct': [1, 1, 0, 1, 0, 1, 1, 1, 0, 0, 1, 1, 1, 1, 0],
-        'time_spent': [45, 32, 58, 40, 90, 35, 38, 42, 65, 55, 48, 39, 30, 40, 70],
-        'timestamp': pd.date_range(start='2024-01-01', periods=15, freq='D')
-    }
-    interactions_df = pd.DataFrame(interactions_data)
-    
-    # Mock question bank
-    qbank_data = {
-        'question_id': range(1, 11),
-        'concept': ['algebra', 'algebra', 'algebra', 'algebra', 'geometry',
-                   'geometry', 'geometry', 'calculus', 'calculus', 'statistics'],
-        'difficulty': [1, 2, 2, 3, 1, 2, 3, 2, 3, 2],
-        'question_text': [
-            'Solve: 2x + 5 = 13',
-            'Expand: (x + 2)(x - 3)',
-            'Solve: 3x² = 12',
-            'Factor: x² + 5x + 6',
-            'Find area of triangle with base 5, height 8',
-            'Calculate perimeter of rectangle 4×6',
-            'Find volume of sphere with radius 3',
-            'Find derivative of x³ + 2x²',
-            'Integrate: ∫(2x + 1)dx',
-            'Calculate mean of: 2, 4, 6, 8, 10'
-        ]
-    }
-    qbank_df = pd.DataFrame(qbank_data)
-    
-    return interactions_df, qbank_df
-
-
-def load_data():
-    """Load datasets with fallback to mock data"""
-    try:
-        interactions_df = pd.read_csv('data/student_interactions.csv')
-        qbank_df = pd.read_csv('data/question_bank.csv')
-        
-        # Parse timestamp if exists
-        if 'timestamp' in interactions_df.columns:
-            interactions_df['timestamp'] = pd.to_datetime(interactions_df['timestamp'])
-        
-        return interactions_df, qbank_df
-    except (FileNotFoundError, pd.errors.EmptyDataError):
-        st.warning("⚠️ Using mock data for demonstration. Real data files not found.")
-        return create_mock_data()
-
 
 def render_login_page():
     """Render login/registration page"""
@@ -254,7 +199,7 @@ def render_subject_selection():
     st.success("📚 **More courses coming soon!** Stay tuned for Biology, History, Geography, and more exciting subjects!")
 
 
-def render_initial_assessment(tutor_agent, qbank, profile_manager, student_id):
+def render_initial_assessment(tutor_agent, profile_manager, student_id):
     """Render initial assessment to determine student level with inline feedback"""
     st.title(f"📋 Initial Assessment - {st.session_state.selected_subject}")
     st.subheader("Let's analyze your knowledge level...")
@@ -1223,7 +1168,7 @@ def render_dashboard(profile_manager, dkt, path_manager, student_id):
             st.caption("Great! Try harder problems or teach others.")
 
 
-def render_quiz(qbank, student_id, profile_manager, tutor_agent):
+def render_quiz(student_id, profile_manager, tutor_agent):
     """Render interactive quiz with topic-based unlocking"""
     st.title("📝 Interactive Quiz")
     
@@ -1988,31 +1933,21 @@ def main():
         render_login_page()
         return
     
-    # Load data
-    interactions_df, qbank_df = load_data()
-    
-    if interactions_df is None or qbank_df is None:
-        st.error("Cannot start application without data files.")
-        return
-    
     # Check if subject is selected
     if not st.session_state.selected_subject:
         render_subject_selection()
         return
     
     # Initialize managers
-    concepts = interactions_df['concept'].unique().tolist()
+    concepts = ['algebra', 'geometry', 'trigonometry', 'calculus', 'statistics']
     
     profile_manager = LearnerProfileManager(concepts)
-    profile_manager.update_from_interactions(interactions_df)
     
     dkt = SimplifiedDKT(concepts)
     
     path_manager = AdaptivePathManager(
         LearningPathGenerator(concepts)
     )
-    
-    qbank = QuestionBank(qbank_df)
     
     tutor_agent = PersonalizedTutorAgent()
     
@@ -2029,7 +1964,7 @@ def main():
     
     # Check if initial assessment is complete
     if not st.session_state.assessment_complete:
-        render_initial_assessment(tutor_agent, qbank, profile_manager, st.session_state.student_id)
+        render_initial_assessment(tutor_agent, profile_manager, st.session_state.student_id)
         return
     
     # If structured learning flow should be displayed (after assessment)
@@ -2067,7 +2002,7 @@ def main():
         render_dashboard_post_assessment()
     
     elif page == "Interactive Quiz":
-        render_quiz(qbank, st.session_state.student_id, profile_manager, tutor_agent)
+        render_quiz(st.session_state.student_id, profile_manager, tutor_agent)
     
     elif page == "Learning Path":
         render_learning_path(path_manager, profile_manager, st.session_state.student_id)
